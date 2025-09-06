@@ -1,9 +1,9 @@
 name: Run Bot
 
 on:
-  workflow_dispatch: {}        # əl ilə işə salmaq üçün
+  workflow_dispatch: {}
   schedule:
-    - cron: "0 9,14,20 * * *"  # 09:00, 14:00, 20:00 UTC
+    - cron: "0 9,14,20 * * *"   # gündə 3 dəfə (UTC)
 
 jobs:
   run:
@@ -20,13 +20,26 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # requirements repo kökündə deyil, bu qovluqdadır
+          pip install -r .github/workflows/requirements.txt
 
       - name: Run script
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          KEYWORDS: ${{ secrets.KEYWORDS }}
-          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
-          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
-        run: python main.py
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACTIVE_PLATFORMS:   ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS:           ${{ secrets.KEYWORDS }}
+          DAILY_LIMIT:        ${{ secrets.DAILY_LIMIT }}
+        run: python .github/workflows/main.py
+
+      # DEBUG: workflow həmişə bitəndə Telegram-a ping atırıq (secrets düzgünmü?)
+      - name: Send Telegram debug ping (always)
+        if: always()
+        run: |
+          if [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                 -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+                 -d text="✅ GitHub Actions ping: run $GITHUB_RUN_NUMBER finished."
+          else
+            echo "Telegram secrets missing; skip debug ping."
+          fi
