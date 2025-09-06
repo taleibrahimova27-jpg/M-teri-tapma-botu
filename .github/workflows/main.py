@@ -40,17 +40,14 @@ def search_reddit(kw, max_items=50):
     return fetch_rss(url, max_items)
 
 def search_youtube(kw, max_items=50):
-    # rəsmi axtarış RSS
     url = f"https://www.youtube.com/feeds/videos.xml?search_query={quote_plus(kw)}"
     return fetch_rss(url, max_items)
 
 def search_hackernews(kw, max_items=50):
-    # hnrss.org vasitəsilə
     url = f"https://hnrss.org/newest?q={quote_plus(kw)}"
     return fetch_rss(url, max_items)
 
 def search_producthunt(kw, max_items=50):
-    # Product Hunt rəsmi RSS vermir — RSSHub istifadə edirik (mövcud olmaya da bilər)
     url = f"https://rsshub.app/producthunt/today?search={quote_plus(kw)}"
     items = fetch_rss(url, max_items)
     if not items:
@@ -67,7 +64,6 @@ PLATFORM_FUNCS = {
     "youtube":      search_youtube,
     "hackernews":   search_hackernews,
     "producthunt":  search_producthunt,
-    # aşağıdakılar hələ RSS-sizdir – arqumentlər gəlsə də problem yaratmasın deyə **kwargs qəbul edirik
     "instagram":    lambda *args, **kwargs: skip_platform_msg("instagram"),
     "tiktok":       lambda *args, **kwargs: skip_platform_msg("tiktok"),
     "threads":      lambda *args, **kwargs: skip_platform_msg("threads"),
@@ -92,7 +88,6 @@ def send_telegram(text):
         log(f"Telegram exception: {e}")
         return False
 
-# ---- Util ----
 def parse_env_list(val, default=[]):
     if not val:
         return default
@@ -100,7 +95,6 @@ def parse_env_list(val, default=[]):
     return [p.strip() for p in parts if p.strip()]
 
 if __name__ == "__main__":
-    # ENV
     ACTIVE_PLATFORMS = parse_env_list(
         os.getenv("ACTIVE_PLATFORMS", "reddit,youtube,hackernews,producthunt,instagram,tiktok,threads").lower()
     )
@@ -110,13 +104,16 @@ if __name__ == "__main__":
     except:
         DAILY_LIMIT = 50
 
-    # Diqnostika
     tok_ok = "OK" if os.getenv("TELEGRAM_BOT_TOKEN") else "MISSING"
     cid_ok = "OK" if os.getenv("TELEGRAM_CHAT_ID") else "MISSING"
     log(f"ENV check: TOK={tok_ok} CID={cid_ok} PLATFORMS={ACTIVE_PLATFORMS} KW={','.join(KEYWORDS)} LIMIT={DAILY_LIMIT}")
 
-    # Axtarış
-    total_sent = 0
+    # ➜ BOT START PING (həmişə göndərməyə cəhd edir)
+    send_telegram("🔔 Bot işə düşdü. Axtarış başlayır…")
+
+    total_msgs = 0
+    total_found = 0
+
     for kw in KEYWORDS:
         kw = kw.strip()
         if not kw:
@@ -130,18 +127,17 @@ if __name__ == "__main__":
             try:
                 items = fn(kw, max_items=DAILY_LIMIT)
             except TypeError:
-                # hər ehtimala qarşı – bəzi funksiyalar max_items qəbul etmirsə
                 items = fn(kw)
             except Exception as e:
                 log(f"{plat}: axtarış xətası -> {e}")
                 items = []
 
             log(f"{plat}: {len(items)} nəticə toplandı.")
+            total_found += len(items)
 
             if not items:
                 continue
 
-            # Mesajı yığ
             lines = [f"🔎 <b>{plat}</b> • <i>{html.escape(kw)}</i>"]
             for it in items[: min(10, DAILY_LIMIT)]:
                 title = clean_text(it.get("title", ""), 120)
@@ -151,13 +147,12 @@ if __name__ == "__main__":
             msg = "\n".join(lines)
 
             if send_telegram(msg):
-                total_sent += 1
-                time.sleep(0.5)  # çox sürətli göndərməyək
+                total_msgs += 1
+                time.sleep(0.5)
 
-    if total_sent == 0:
-        if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("TELEGRAM_CHAT_ID"):
-            log("Telegram token/chat_id yoxdur, mesajı keçdim.")
-        else:
-            log("Heç bir platformadan göndəriləcək nəticə tapılmadı.")
-    else:
-        log(f"Bitdi. {total_sent} Telegram mesajı göndərildi.")
+    # ➜ XÜLASƏ – həmişə göndər
+    summary = f"✅ Bitdi. Tapılan nəticə: {total_found}. Göndərilən TG mesajı: {total_msgs}."
+    if total_found == 0:
+        summary += " Heç nə tapılmadısa, ehtimal: açar sözlər dar seçilib və ya platformalarda uyğun RSS yoxdur."
+    send_telegram(summary)
+    log(summary)
