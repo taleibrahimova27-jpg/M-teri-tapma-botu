@@ -1,168 +1,187 @@
-# .github/workflows/main.py
-import os, time, json, requests, re
-from datetime import datetime, timezone
-from urllib.parse import quote_plus
+import os, sys, time, urllib.parse
+import requests
 import feedparser
+from bs4 import BeautifulSoup
 
-# ------- Secrets / Config -------
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-ACTIVE_PLATFORMS = [p.strip().lower() for p in os.getenv("ACTIVE_PLATFORMS","").split(",") if p.strip()]
-KEYWORDS = [k.strip() for k in os.getenv("KEYWORDS","").split(",") if k.strip()]
-try:
-    DAILY_LIMIT = int(os.getenv("DAILY_LIMIT","20"))
-except: DAILY_LIMIT = 20
+# ---------- Helpers ----------
+def env(name, default=""):
+    v = os.getenv(name)
+    return v if v is not None and v != "" else default
 
-UA = {"User-Agent":"leads-bot/1.0 (+github actions)"}
+def split_list(s):
+    if not s:
+        return []
+    # ; və , hər ikisini dəstəklə
+    raw = [x.strip() for x in s.replace(";", ",").split(",")]
+    return [x for x in raw if x]
 
-# ------- Utils -------
-def send_telegram(text: str):
-    if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram token/chat_id yoxdur, mesaji kecdim.")
-        return False
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    r = requests.post(url, json={
-        "chat_id": CHAT_ID,
-        "text": text,
-        "disable_web_page_preview": True
-    }, timeout=30)
-    ok = r.ok and r.json().get("ok", False)
-    if not ok:
-        print("TG error:", r.text)
-    return ok
-
-def clean(text: str) -> str:
-    if not text: return ""
-    text = re.sub(r"\s+", " ", str(text)).strip()
-    return text
-
-def from_feed(url: str, keyword: str = None, platform: str = "", limit: int = 15):
-    """Generic RSS reader + optional keyword filter (title+summary)."""
-    out = []
+def tg_send(token, chat_id, text):
     try:
-        feed = feedparser.parse(url)
-        for e in feed.entries[:limit]:
-            title = clean(getattr(e, "title", ""))
-            summary = clean(getattr(e, "summary", "")) or clean(getattr(e, "description", ""))
-            link = getattr(e, "link", "")
-            if keyword:
-                hay = f"{title} {summary}".lower()
-                if keyword.lower() not in hay:
-                    continue
-            out.append({
-                "platform": platform,
-                "title": title or "(no title)",
-                "username": clean(getattr(e, "author", "")),
-                "url": link,
-            })
-    except Exception as ex:
-        print(f"RSS error for {platform}:", ex)
+        if not token or not chat_id:
+            print("Telegram token/chat_id yoxdur, mesajı keçdim.")
+            return False
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": text}
+        )
+        if r.status_code != 200:
+            print("Telegram error:", r.status_code, r.text[:200])
+        return r.ok
+    except Exception as e:
+        print("Telegram exception:", e)
+        return False
+
+def fetch_rss(url, headers=None):
+    try:
+        if headers:
+            res = requests.get(url, headers=headers, timeout=20)
+            res.raise_for_status()
+            return feedparser.parse(res.text)
+        # feedparser özü yükləyə bilir, bəzən header lazım olmur
+        return feedparser.parse(url)
+    except Exception as e:
+        print("RSS error:", url, e)
+        return {"entries": []}
+
+def clamp(n, lo, hi):
+    return max(lo, min(hi, n))
+
+# ---------- Env / Config ----------
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = env("TELEGRAM_CHAT_ID")
+ACTIVE_PLATFORMS   = [p.lower() for p in split_list(env("ACTIVE_PLATFORMS"))]
+KEYWORDS           = split_list(env("KEYWORDS"))
+DAILY_LIMIT        = clamp(int(env("DAILY_LIMIT", "20") or 20), 1, 200)
+
+print("ENV check:",
+      "TOK=" + ("OK" if TELEGRAM_BOT_TOKEN else "MISSING"),
+      "CID=" + ("OK" if TELEGRAM_CHAT_ID else "MISSING"),
+      "PLATFORMS=" + ",".join(ACTIVE_PLATFORMS or ["(none)"]),
+      "KW=" + ("/".join(KEYWORDS) if KEYWORDS else "(none)"),
+      "LIMIT=" + str(DAILY_LIMIT))
+
+if not ACTIVE_PLATFORMS:
+    ACTIVE_PLATFORMS = ["reddit", "youtube", "hackernews", "producthunt"]
+
+# ---------- Platform fetchers (RSS, API-siz) ----------
+
+def search_reddit(keyword, max_items=50):
+    q = urllib.parse.quote(keyword)
+    url = f"https://www.reddit.com/search.rss?q={q}&sort=new"
+    # Reddit bəzi hallarda UA istəyir
+    headers = {"User-Agent": "Mozilla/5.0 (GitHubActions Bot)"}
+    feed = fetch_rss(url, headers=headers)
+    out = []
+    for e in feed.get("entries", []):
+        out.append(("reddit", e.get("title", "(no title)"), e.get("link")))
+        if len(out) >= max_items: break
     return out
 
-# ------- Per-platform fetchers (API-siz mümkün olanlar) -------
-def fetch_reddit(keyword, limit=10):
-    # Reddit-in rəsmi RSS axtarışı
-    q = quote_plus(keyword)
-    url = f"https://www.reddit.com/search.rss?q={q}&sort=new&t=week"
-    return from_feed(url, None, "reddit", limit)
-
-def fetch_youtube(keyword, limit=10):
-    # YouTube axtarış RSS (rəsmi)
-    q = quote_plus(keyword)
+def search_youtube(keyword, max_items=50):
+    q = urllib.parse.quote_plus(keyword)
     url = f"https://www.youtube.com/feeds/videos.xml?search_query={q}"
-    return from_feed(url, None, "youtube", limit)
+    feed = fetch_rss(url)
+    out = []
+    for e in feed.get("entries", []):
+        link = e.get("link")
+        title = e.get("title", "(no title)")
+        out.append(("youtube", title, link))
+        if len(out) >= max_items: break
+    return out
 
-def fetch_hackernews(keyword, limit=10):
-    # HN – Algolia public API (açar lazım deyil)
-    url = "https://hn.algolia.com/api/v1/search"
-    params = {"query": keyword, "tags": "story", "hitsPerPage": min(limit, 50)}
-    items = []
-    try:
-        r = requests.get(url, params=params, headers=UA, timeout=30)
-        r.raise_for_status()
-        for hit in r.json().get("hits", []):
-            items.append({
-                "platform": "hackernews",
-                "title": clean(hit.get("title","")),
-                "username": clean(hit.get("author","")),
-                "url": hit.get("url") or f"https://news.ycombinator.com/item?id={hit.get('objectID')}",
-            })
-    except Exception as ex:
-        print("HN error:", ex)
-    return items[:limit]
+def search_hackernews(keyword, max_items=50):
+    # hnrss.org axtarışı dəstəkləyir
+    q = urllib.parse.quote(keyword)
+    url = f"https://hnrss.org/newest?q={q}"
+    feed = fetch_rss(url)
+    out = []
+    for e in feed.get("entries", []):
+        out.append(("hackernews", e.get("title", "(no title)"), e.get("link")))
+        if len(out) >= max_items: break
+    return out
 
-def fetch_producthunt(keyword, limit=10):
-    # PH-in ümumi RSS feed-i, başlıqda keyword filteri
+def search_producthunt(keyword, max_items=50):
+    # PH rəsmi axtarış RSS vermir; ümumi feed-i çəkib filtrləyirik
     url = "https://www.producthunt.com/feed"
-    return from_feed(url, keyword, "producthunt", limit)
+    feed = fetch_rss(url)
+    k = keyword.lower()
+    out = []
+    for e in feed.get("entries", []):
+        title = e.get("title", "")
+        if k in title.lower():
+            out.append(("producthunt", title, e.get("link")))
+            if len(out) >= max_items: break
+    return out
 
-# Placeholder-lar (bloklanırsa sükutla boş qaytarırıq)
-def fetch_instagram(keyword, limit=10):
-    print("instagram: rəsmi RSS yoxdur, atlanır.")
+def skip_platform_msg(name):
+    msg = f"{name}: rəsmi RSS yoxdur, atlanır."
+    print(msg)
     return []
 
-def fetch_tiktok(keyword, limit=10):
-    print("tiktok: rəsmi RSS yoxdur, atlanır.")
-    return []
-
-def fetch_threads(keyword, limit=10):
-    print("threads: rəsmi RSS yoxdur, atlanır.")
-    return []
-
-FETCHERS = {
-    "reddit": fetch_reddit,
-    "youtube": fetch_youtube,
-    "hackernews": fetch_hackernews,
-    "producthunt": fetch_producthunt,
-    "instagram": fetch_instagram,
-    "tiktok": fetch_tiktok,
-    "threads": fetch_threads,
+PLATFORM_FUNCS = {
+    "reddit": search_reddit,
+    "youtube": search_youtube,
+    "hackernews": search_hackernews,
+    "producthunt": search_producthunt,
+    # aşağıdakılar RSS-sizdir – skip
+    "instagram": lambda kw, m=50: skip_platform_msg("instagram"),
+    "tiktok":    lambda kw, m=50: skip_platform_msg("tiktok"),
+    "threads":   lambda kw, m=50: skip_platform_msg("threads"),
 }
 
-# ------- Orchestrator -------
-def main():
-    if not KEYWORDS:
-        send_telegram("⚠️ KEYWORDS boşdur. Secrets bölməsində KEYWORDS əlavə et.")
-        return
+# ---------- Run search ----------
+all_results = []
+for platform in ACTIVE_PLATFORMS:
+    fn = PLATFORM_FUNCS.get(platform)
+    if not fn:
+        print(f"{platform}: tanınmır, keçdim.")
+        continue
 
-    plats = ACTIVE_PLATFORMS or list(FETCHERS.keys())
-    results, seen = [], set()
+    found = []
+    if KEYWORDS:
+        for kw in KEYWORDS:
+            items = fn(kw, max_items=DAILY_LIMIT)
+            # “title + url” üzrə duplikatları aradan qaldıraq
+            for t, title, link in [("kw", *x[1:]) for x in items]:
+                key = (platform, title, link)
+                if key not in [(p, ti, li) for p, ti, li in found]:
+                    found.append((platform, title, link))
+            # limitə çatdıqsa dayan
+            if len(found) >= DAILY_LIMIT:
+                break
+    else:
+        # keywords boşdursa – ümumi feed-dən götür (yalnız RSS olanlarda)
+        if platform in ("reddit", "youtube", "hackernews", "producthunt"):
+            found = fn("", max_items=DAILY_LIMIT)
+        else:
+            found = []
 
-    for kw in KEYWORDS:
-        for plat in plats:
-            fn = FETCHERS.get(plat)
-            if not fn:
-                print("Naməlum platforma:", plat); continue
-            left = max(0, DAILY_LIMIT - len(results))
-            if left == 0: break
-            try:
-                batch = fn(kw, min(5, left))
-            except Exception as ex:
-                print(f"{plat} fetch error:", ex)
-                batch = []
-            for it in batch:
-                url = it.get("url","")
-                if not url or url in seen: 
-                    continue
-                seen.add(url)
-                results.append(it)
-            time.sleep(0.8)  # rate-limit üçün kiçik pauza
-        if len(results) >= DAILY_LIMIT: 
-            break
+    print(f"{platform}: {len(found)} nəticə toplandı.")
+    all_results.extend(found)
 
-    if not results:
-        send_telegram("ℹ️ Heç nə tapılmadı (platformalar məhdud ola bilər).")
-        return
+# Limit yekunda
+all_results = all_results[:DAILY_LIMIT]
+print("Cəmi nəticə:", len(all_results))
 
-    # İlk 12 nəticəni yığcam xülasə şəklində göndərək
-    top = results[:12]
-    lines = [f"🔎 {len(results)} nəticə tapıldı (ilk {len(top)} göstərilir)"]
-    for i, it in enumerate(top, 1):
-        title = it['title'][:120]
-        user  = f" — @{it['username']}" if it.get("username") else ""
-        lines.append(f"{i}. [{it['platform']}] {title}{user}\n{it['url']}")
-    lines.append(f"\n⏱ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
-    send_telegram("\n\n".join(lines))
+# ---------- Send to Telegram ----------
+if all_results and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+    lines = []
+    for p, title, link in all_results:
+        safe_title = BeautifulSoup(title, "html.parser").get_text(" ", strip=True)
+        lines.append(f"• [{p}] {safe_title}\n{link}")
+    message = "🔎 Tapılan leadlər:\n\n" + "\n\n".join(lines)
+    tg_send(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message)
+else:
+    if not all_results:
+        print("Göndəriləcək nəticə yoxdur.")
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram məlumatları yoxdur.")
 
-if __name__ == "__main__":
-    main()
+# ---------- Always: finish ping ----------
+try:
+    total_found = len(all_results)
+except Exception:
+    total_found = 0
+
+tg_send(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+        f"🟢 Run bitdi. Toplanan lead sayı: {total_found}")
