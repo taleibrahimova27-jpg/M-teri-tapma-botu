@@ -1,7 +1,7 @@
 name: Run Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:        # əl ilə Run düyməsi
   schedule:
     - cron: '0 9,14,20 * * *'  # gündə 3 dəfə (UTC)
 
@@ -17,25 +17,32 @@ jobs:
         with:
           python-version: '3.10'
 
-      # --- SMOKE TEST: Telegram secrets doğrudanmı var və işləyir?
-      - name: Smoke test Telegram secrets
-        env:
-          TOK: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          echo "TOK set? $([ -n "$TOK" ] && echo yes || echo no)"
-          echo "CID set? $([ -n "$CID" ] && echo yes || echo no)"
-          if [ -n "$TOK" ] && [ -n "$CID" ]; then
-            curl -s "https://api.telegram.org/bot${TOK}/sendMessage" \
-              -d chat_id="${CID}" \
-              -d text="✅ GitHub Actions smoke test (salam!)" \
-              -d disable_web_page_preview=true -d parse_mode=HTML || true
-          fi
-
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser
+          pip install requests feedparser beautifulsoup4
+
+      # 🔥 SMOKE TEST: Telegram-a test mesajı
+      - name: Smoke test Telegram secrets
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -eux
+          echo "TOK set? $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo yes || echo no)"
+          echo "CID set? $([ -n "$TELEGRAM_CHAT_ID" ] && echo yes || echo no)"
+          # Ping mesajı
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="✅ GitHub Actions ping: $(date -u +'%F %T UTC')" | tee /tmp/tg.json
+          python - <<'PY'
+import json,sys,os
+p="/tmp/tg.json"
+print("RAW:", open(p, "r", encoding="utf-8", errors="ignore").read())
+j=json.load(open(p))
+print("ok:", j.get("ok"), "desc:", j.get("description"))
+sys.exit(0 if j.get("ok") else 1)
+PY
 
       - name: Run script
         env:
