@@ -1,4 +1,3 @@
-# .github/workflows/main.py
 import os, time, requests, feedparser
 from html import unescape
 
@@ -10,6 +9,18 @@ try:
     LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
 except:
     LIMIT = 50
+
+def mask(s, keep=4):
+    return s[:keep] + "..." if s else ""
+
+print(
+    "ENV check:",
+    f"TOK={'OK' if TOK else 'MISSING'}({mask(TOK)})",
+    f"CID={'OK' if CID else 'MISSING'}({mask(CID)})",
+    f"PLATFORMS={PLATFORMS or 'default'}",
+    f"KW={'/'.join(KW) if KW else '(none)'}",
+    f"LIMIT={LIMIT}",
+)
 
 def tg(text: str):
     if not TOK or not CID:
@@ -26,7 +37,7 @@ def tg(text: str):
             },
             timeout=30,
         )
-        print("TG:", r.status_code, r.text[:120])
+        print("TG:", r.status_code, r.text[:160])
     except Exception as e:
         print("TG error:", e)
 
@@ -37,8 +48,7 @@ def match_kw(title: str) -> bool:
     return any(k in t for k in KW)
 
 def fetch_reddit(max_items=50):
-    url = "https://www.reddit.com/r/all/.rss"
-    feed = feedparser.parse(url)
+    feed = feedparser.parse("https://www.reddit.com/r/all/.rss")
     out = []
     for e in feed.entries:
         title = unescape(e.get("title", ""))
@@ -51,8 +61,7 @@ def fetch_reddit(max_items=50):
     return out
 
 def fetch_hackernews(max_items=50):
-    url = "https://hnrss.org/newest"
-    feed = feedparser.parse(url)
+    feed = feedparser.parse("https://hnrss.org/newest")
     out = []
     for e in feed.entries:
         title = unescape(e.get("title", ""))
@@ -65,9 +74,7 @@ def fetch_hackernews(max_items=50):
     return out
 
 def fetch_youtube(max_items=50):
-    # Nümunə kanal feed (API-siz)
-    url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCVHFbqXqoYvEWM1Ddxl0QDg"
-    feed = feedparser.parse(url)
+    feed = feedparser.parse("https://www.youtube.com/feeds/videos.xml?channel_id=UCVHFbqXqoYvEWM1Ddxl0QDg")
     out = []
     for e in feed.entries:
         title = unescape(e.get("title", ""))
@@ -83,7 +90,6 @@ def fetch_placeholder(name: str, max_items=0):
     print(f"{name}: rəsmi RSS yoxdur, atlanır.")
     return []
 
-# HAMISI EYNİ İMZA İLƏ (max_items) ÇAĞIRILSIN DEYƏ LAMBDALAR
 FETCHERS = {
     "reddit":        (lambda max_items=50: fetch_reddit(max_items)),
     "hackernews":    (lambda max_items=50: fetch_hackernews(max_items)),
