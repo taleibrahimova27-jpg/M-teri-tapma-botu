@@ -1,43 +1,121 @@
-# .github/workflows/main.py
-import os, sys, json, time
-import requests
+import os, time, requests, feedparser
+from html import unescape
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
-ACTIVE    = os.getenv("ACTIVE_PLATFORMS", "")
-KEYWORDS  = os.getenv("KEYWORDS", "")
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
+TOK = os.getenv("TELEGRAM_BOT_TOKEN", "")
+CID = os.getenv("TELEGRAM_CHAT_ID", "")
+PLATFORMS = [p.strip().lower() for p in os.getenv("ACTIVE_PLATFORMS", "").split(",") if p.strip()]
+KW = [k.strip().lower() for k in os.getenv("KEYWORDS", "").split("/") if k.strip()]
+try:
+    LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
+except:
+    LIMIT = 50
 
-print(f"ENV check: TOK={'OK' if BOT_TOKEN else 'MISSING'} CID={'OK' if CHAT_ID else 'MISSING'} "
-      f"PLATFORMS={ACTIVE} KW={KEYWORDS} LIMIT={DAILY_LIMIT}", flush=True)
-
-def tg(text):
-    if not (BOT_TOKEN and CHAT_ID):
-        print("Telegram disabled: missing token/chat_id", flush=True); return
+def tg(text: str):
+    if not TOK or not CID:
+        print("Telegram token/chat_id yoxdur, mesajı keçdim.")
+        return
     try:
         r = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text, "disable_web_page_preview": True}
+            f"https://api.telegram.org/bot{TOK}/sendMessage",
+            data={
+                "chat_id": CID,
+                "text": text,
+                "disable_web_page_preview": True,
+                "parse_mode": "HTML",
+            },
+            timeout=30,
         )
-        print(f"TG status: {r.status_code} | {r.text[:180]}", flush=True)
+        print("TG:", r.status_code, r.text[:120])
     except Exception as e:
-        print(f"TG error: {e}", flush=True)
+        print("TG error:", e)
 
-# PING — hər run-da bir dəfə göndərilir
-tg("✅ Bot başladı (GitHub Actions)")
+def match_kw(title: str) -> bool:
+    if not KW:  # keywords boşdursa hamısını götür
+        return True
+    t = (title or "").lower()
+    return any(k in t for k in KW)
 
-# --- BURADA SƏNİN TOPLAMA/AYIRMA KODUN GEDİR ---
-# nümunə olaraq sadəcə log edirik
-platforms = [p.strip() for p in ACTIVE.split(",") if p.strip()]
-print("Aktiv platformalar:", platforms, flush=True)
+def fetch_reddit(max_items=50):
+    url = "https://www.reddit.com/r/all/.rss"
+    feed = feedparser.parse(url)
+    out = []
+    for e in feed.entries:
+        title = unescape(e.get("title", ""))
+        link = e.get("link", "")
+        if match_kw(title):
+            out.append(("reddit", title, link))
+        if len(out) >= max_items:
+            break
+    print(f"reddit: {len(out)} nəticə toplandı.")
+    return out
 
-# … buraya toplayıcıları çağırırsan …
-# tapılan n nəticə üçün misal:
-found_counts = {"reddit": 0, "youtube": 0, "hackernews": 0, "producthunt": 0, "instagram": 0, "tiktok": 0, "threads": 0}
+def fetch_hackernews(max_items=50):
+    url = "https://hnrss.org/newest"
+    feed = feedparser.parse(url)
+    out = []
+    for e in feed.entries:
+        title = unescape(e.get("title", ""))
+        link = e.get("link", "")
+        if match_kw(title):
+            out.append(("hackernews", title, link))
+        if len(out) >= max_items:
+            break
+    print(f"hackernews: {len(out)} nəticə toplandı.")
+    return out
 
-summary_lines = [f"{k}: {v}" for k, v in found_counts.items() if k in platforms or not platforms]
-summary = "Nəticə xülasəsi:\n" + "\n".join(summary_lines)
-print(summary, flush=True)
+def fetch_youtube(max_items=50):
+    # ümumi trend RSS yoxdur; nümunə kanal feed (YouTube Data API olmadan)
+    # İstəsən sonradan kanal/region feed-lərini özün üçün uyğunlaşdırarıq.
+    url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCVHFbqXqoYvEWM1Ddxl0QDg"  # Google Developers
+    feed = feedparser.parse(url)
+    out = []
+    for e in feed.entries:
+        title = unescape(e.get("title", ""))
+        link = e.get("link", "")
+        if match_kw(title):
+            out.append(("youtube", title, link))
+        if len(out) >= max_items:
+            break
+    print(f"youtube: {len(out)} nəticə toplandı.")
+    return out
 
-# Bitdikdə də mütləq bildiriş
-tg("✅ Bot bitdi.\n" + summary)
+def fetch_placeholder(name):
+    print(f"{name}: rəsmi RSS yoxdur, atlanır.")
+    return []
+
+FETCHERS = {
+    "reddit":        fetch_reddit,
+    "hackernews":    fetch_hackernews,
+    "youtube":       fetch_youtube,
+    "producthunt":   fetch_placeholder,
+    "instagram":     fetch_placeholder,
+    "tiktok":        fetch_placeholder,
+    "threads":       fetch_placeholder,
+}
+
+def main():
+    tg("🚀 Bot başladı. Aktiv platformalar: <b>%s</b> | limit: <b>%s</b>" %
+       (", ".join(PLATFORMS) if PLATFORMS else "hamısı (default)", LIMIT))
+
+    items_all = []
+    active = PLATFORMS or list(FETCHERS.keys())
+    for p in active:
+        fn = FETCHERS.get(p, fetch_placeholder)
+        try:
+            items = fn(max_items=LIMIT)
+        except TypeError:
+            # köhnə lambda-larda max_items yox idisə
+            items = fn()
+        items_all.extend(items)
+
+    # LIMIT qədərini göndərək
+    sent = 0
+    for src, title, link in items_all[:LIMIT]:
+        tg(f"🔎 <b>{src}</b>\n{title}\n{link}")
+        sent += 1
+        time.sleep(0.3)
+
+    tg(f"✅ Bitdi. Göndərilən: <b>{sent}</b> xəbər.")
+
+if __name__ == "__main__":
+    main()
