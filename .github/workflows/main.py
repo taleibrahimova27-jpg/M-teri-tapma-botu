@@ -1,3 +1,4 @@
+# .github/workflows/main.py
 import os, time, requests, feedparser
 from html import unescape
 
@@ -30,7 +31,7 @@ def tg(text: str):
         print("TG error:", e)
 
 def match_kw(title: str) -> bool:
-    if not KW:  # keywords boşdursa hamısını götür
+    if not KW:
         return True
     t = (title or "").lower()
     return any(k in t for k in KW)
@@ -64,9 +65,8 @@ def fetch_hackernews(max_items=50):
     return out
 
 def fetch_youtube(max_items=50):
-    # ümumi trend RSS yoxdur; nümunə kanal feed (YouTube Data API olmadan)
-    # İstəsən sonradan kanal/region feed-lərini özün üçün uyğunlaşdırarıq.
-    url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCVHFbqXqoYvEWM1Ddxl0QDg"  # Google Developers
+    # Nümunə kanal feed (API-siz)
+    url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCVHFbqXqoYvEWM1Ddxl0QDg"
     feed = feedparser.parse(url)
     out = []
     for e in feed.entries:
@@ -79,18 +79,19 @@ def fetch_youtube(max_items=50):
     print(f"youtube: {len(out)} nəticə toplandı.")
     return out
 
-def fetch_placeholder(name):
+def fetch_placeholder(name: str, max_items=0):
     print(f"{name}: rəsmi RSS yoxdur, atlanır.")
     return []
 
+# HAMISI EYNİ İMZA İLƏ (max_items) ÇAĞIRILSIN DEYƏ LAMBDALAR
 FETCHERS = {
-    "reddit":        fetch_reddit,
-    "hackernews":    fetch_hackernews,
-    "youtube":       fetch_youtube,
-    "producthunt":   fetch_placeholder,
-    "instagram":     fetch_placeholder,
-    "tiktok":        fetch_placeholder,
-    "threads":       fetch_placeholder,
+    "reddit":        (lambda max_items=50: fetch_reddit(max_items)),
+    "hackernews":    (lambda max_items=50: fetch_hackernews(max_items)),
+    "youtube":       (lambda max_items=50: fetch_youtube(max_items)),
+    "producthunt":   (lambda max_items=50: fetch_placeholder("producthunt", max_items)),
+    "instagram":     (lambda max_items=50: fetch_placeholder("instagram", max_items)),
+    "tiktok":        (lambda max_items=50: fetch_placeholder("tiktok", max_items)),
+    "threads":       (lambda max_items=50: fetch_placeholder("threads", max_items)),
 }
 
 def main():
@@ -100,15 +101,14 @@ def main():
     items_all = []
     active = PLATFORMS or list(FETCHERS.keys())
     for p in active:
-        fn = FETCHERS.get(p, fetch_placeholder)
+        fn = FETCHERS.get(p, lambda max_items=50, name=p: fetch_placeholder(name, max_items))
         try:
             items = fn(max_items=LIMIT)
-        except TypeError:
-            # köhnə lambda-larda max_items yox idisə
-            items = fn()
+        except Exception as e:
+            print(f"{p}: fetch xətası:", e)
+            items = []
         items_all.extend(items)
 
-    # LIMIT qədərini göndərək
     sent = 0
     for src, title, link in items_all[:LIMIT]:
         tg(f"🔎 <b>{src}</b>\n{title}\n{link}")
