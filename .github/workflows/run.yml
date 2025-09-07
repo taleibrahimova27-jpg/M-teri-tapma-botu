@@ -1,9 +1,9 @@
-# .github/workflows/run.yml
 name: Run Bot
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 9,14,20 * * *'
+    - cron: '0 9,14,20 * * *'  # gündə 3 dəfə (UTC)
 
 jobs:
   run:
@@ -17,16 +17,31 @@ jobs:
         with:
           python-version: '3.10'
 
+      # --- SMOKE TEST: Telegram secrets doğrudanmı var və işləyir?
+      - name: Smoke test Telegram secrets
+        env:
+          TOK: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "TOK set? $([ -n "$TOK" ] && echo yes || echo no)"
+          echo "CID set? $([ -n "$CID" ] && echo yes || echo no)"
+          if [ -n "$TOK" ] && [ -n "$CID" ]; then
+            curl -s "https://api.telegram.org/bot${TOK}/sendMessage" \
+              -d chat_id="${CID}" \
+              -d text="✅ GitHub Actions smoke test (salam!)" \
+              -d disable_web_page_preview=true -d parse_mode=HTML || true
+          fi
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser beautifulsoup4
+          pip install requests feedparser
 
       - name: Run script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          ACTIVE_PLATFORMS:   ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:           ${{ secrets.KEYWORDS }}
-          DAILY_LIMIT:        ${{ secrets.DAILY_LIMIT }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
         run: python .github/workflows/main.py
