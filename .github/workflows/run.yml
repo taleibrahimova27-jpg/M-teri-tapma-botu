@@ -1,9 +1,9 @@
 name: Run Bot
 
 on:
-  workflow_dispatch:        # əl ilə Run düyməsi
+  workflow_dispatch:        # əl ilə RUN
   schedule:
-    - cron: '0 9,14,20 * * *'  # gündə 3 dəfə (UTC)
+    - cron: '0 9,14,20 * * *'   # gündə 3 dəfə (UTC)
 
 jobs:
   run:
@@ -22,25 +22,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests feedparser beautifulsoup4
 
-      # 🔥 SMOKE TEST: Telegram-a test mesajı
+      # --- TELEGRAM SMOKE TEST (token/chat_id düzgünmü?) ---
       - name: Smoke test Telegram secrets
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        shell: bash
         run: |
-          set -eux
-          echo "TOK set? $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo yes || echo no)"
-          echo "CID set? $([ -n "$TELEGRAM_CHAT_ID" ] && echo yes || echo no)"
-          # Ping mesajı
+          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then echo "TOK set? yes"; else echo "TOK set? no"; fi
+          if [ -n "$TELEGRAM_CHAT_ID" ]; then echo "CID set? yes"; else echo "CID set? no"; fi
           curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="✅ GitHub Actions ping: $(date -u +'%F %T UTC')" | tee /tmp/tg.json
+            -d text="✅ GitHub Actions ping: $(date -u +'%F %T UTC')" \
+            | tee /tmp/tg.json
           python - <<'PY'
-import json,sys,os
-p="/tmp/tg.json"
-print("RAW:", open(p, "r", encoding="utf-8", errors="ignore").read())
-j=json.load(open(p))
-print("ok:", j.get("ok"), "desc:", j.get("description"))
+import json, sys
+with open('/tmp/tg.json','r',encoding='utf-8',errors='ignore') as f:
+    try:
+        j=json.load(f)
+    except Exception as e:
+        print("JSON parse error:", e); sys.exit(1)
+print("RAW ok:", j.get("ok"), "desc:", j.get("description"))
 sys.exit(0 if j.get("ok") else 1)
 PY
 
@@ -51,4 +53,5 @@ PY
           ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
           KEYWORDS: ${{ secrets.KEYWORDS }}
           DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
-        run: python .github/workflows/main.py
+        run: |
+          python .github/workflows/main.py
