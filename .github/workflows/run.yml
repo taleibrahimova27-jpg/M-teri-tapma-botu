@@ -1,9 +1,9 @@
 name: Run Bot
 
 on:
-  workflow_dispatch:        # əl ilə RUN
+  workflow_dispatch:
   schedule:
-    - cron: '0 9,14,20 * * *'   # gündə 3 dəfə (UTC)
+    - cron: '0 9,14,20 * * *'   # UTC ilə gündə 3 dəfə
 
 jobs:
   run:
@@ -18,33 +18,24 @@ jobs:
           python-version: '3.10'
 
       - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests feedparser beautifulsoup4
+        run: python -m pip install --upgrade pip && pip install requests feedparser beautifulsoup4
 
-      # --- TELEGRAM SMOKE TEST (token/chat_id düzgünmü?) ---
-      - name: Smoke test Telegram secrets
+      # --- Telegram secret yoxlamaları (qısa, tək sətrlik) ---
+      - name: Check TELEGRAM_BOT_TOKEN
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: bash -lc 'test -n "$TELEGRAM_BOT_TOKEN" && echo "Token set" || (echo "Token MISSING"; exit 1)'
+
+      - name: Check TELEGRAM_CHAT_ID
+        env:
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: bash -lc 'test -n "$TELEGRAM_CHAT_ID" && echo "Chat ID set" || (echo "Chat ID MISSING"; exit 1)'
+
+      - name: Send Telegram ping
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        shell: bash
-        run: |
-          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then echo "TOK set? yes"; else echo "TOK set? no"; fi
-          if [ -n "$TELEGRAM_CHAT_ID" ]; then echo "CID set? yes"; else echo "CID set? no"; fi
-          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="✅ GitHub Actions ping: $(date -u +'%F %T UTC')" \
-            | tee /tmp/tg.json
-          python - <<'PY'
-import json, sys
-with open('/tmp/tg.json','r',encoding='utf-8',errors='ignore') as f:
-    try:
-        j=json.load(f)
-    except Exception as e:
-        print("JSON parse error:", e); sys.exit(1)
-print("RAW ok:", j.get("ok"), "desc:", j.get("description"))
-sys.exit(0 if j.get("ok") else 1)
-PY
+        run: curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" -d chat_id="${TELEGRAM_CHAT_ID}" -d text="✅ GitHub Actions ping $(date -u +%F-%T)"
 
       - name: Run script
         env:
@@ -53,5 +44,4 @@ PY
           ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
           KEYWORDS: ${{ secrets.KEYWORDS }}
           DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
-        run: |
-          python .github/workflows/main.py
+        run: python .github/workflows/main.py
