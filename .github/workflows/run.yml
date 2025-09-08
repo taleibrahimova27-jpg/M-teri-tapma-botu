@@ -1,47 +1,44 @@
 name: Run Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   schedule:
-    - cron: '0 9,14,20 * * *'   # UTC ilə gündə 3 dəfə
+    - cron: "0 9,14,20 * * *"   # UTC – gündə 3 dəfə
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
       - name: Install deps
-        run: python -m pip install --upgrade pip && pip install requests feedparser beautifulsoup4
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests feedparser
 
-      # --- Telegram secret yoxlamaları (qısa, tək sətrlik) ---
+      # Secrets varsa-yoxsa elə burada yoxlayırıq
       - name: Check TELEGRAM_BOT_TOKEN
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: bash -lc 'test -n "$TELEGRAM_BOT_TOKEN" && echo "Token set" || (echo "Token MISSING"; exit 1)'
+        run: |
+          test -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" && echo "Token set" || (echo "Token MISSING"; exit 1)
 
       - name: Check TELEGRAM_CHAT_ID
-        env:
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: bash -lc 'test -n "$TELEGRAM_CHAT_ID" && echo "Chat ID set" || (echo "Chat ID MISSING"; exit 1)'
-
-      - name: Send Telegram ping
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" -d chat_id="${TELEGRAM_CHAT_ID}" -d text="✅ GitHub Actions ping $(date -u +%F-%T)"
+        run: |
+          test -n "${{ secrets.TELEGRAM_CHAT_ID }}" && echo "Chat ID set" || (echo "Chat ID MISSING"; exit 1)
 
       - name: Run script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Aşağıdakıları istəyə görə Secrets-ə əlavə edə bilərsən; yoxdursa, default olacaq
           ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
           KEYWORDS: ${{ secrets.KEYWORDS }}
           DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
-        run: python .github/workflows/main.py
+        run: |
+          python .github/workflows/main.py
