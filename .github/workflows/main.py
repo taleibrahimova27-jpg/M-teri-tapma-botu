@@ -1,127 +1,169 @@
-import os, time, requests, feedparser
-from html import unescape
+import os
+import time
+import html
+import textwrap
+from urllib.parse import quote_plus
+import requests
+import feedparser
 
-TOK = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CID = os.getenv("TELEGRAM_CHAT_ID", "")
-PLATFORMS = [p.strip().lower() for p in os.getenv("ACTIVE_PLATFORMS", "").split(",") if p.strip()]
-KW = [k.strip().lower() for k in os.getenv("KEYWORDS", "").split("/") if k.strip()]
-try:
-    LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
-except:
-    LIMIT = 50
+# ------------ Env & defaults ------------
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-def mask(s, keep=4):
-    return s[:keep] + "..." if s else ""
+ACTIVE_PLATFORMS = (os.getenv("ACTIVE_PLATFORMS", "reddit,hn,youtube")
+                    .lower().replace(" ", ""))
+# keywords "ayaqqabı/paltar/..." kimi bölünür
+KEYWORDS_RAW = os.getenv("KEYWORDS", "ayaqqabı/telefon").strip()
+KEYWORDS = [k for k in KEYWORDS_RAW.split("/") if k]
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
 
-print(
-    "ENV check:",
-    f"TOK={'OK' if TOK else 'MISSING'}({mask(TOK)})",
-    f"CID={'OK' if CID else 'MISSING'}({mask(CID)})",
-    f"PLATFORMS={PLATFORMS or 'default'}",
-    f"KW={'/'.join(KW) if KW else '(none)'}",
-    f"LIMIT={LIMIT}",
-)
+if not BOT_TOKEN or not CHAT_ID:
+    print(f"ENV check: TOK={'OK' if BOT_TOKEN else 'MISSING'} "
+          f"CID={'OK' if CHAT_ID else 'MISSING'} "
+          f"PLATFORMS={ACTIVE_PLATFORMS} KW={KEYWORDS_RAW} LIMIT={DAILY_LIMIT}")
+    raise SystemExit(1)
 
-def tg(text: str):
-    if not TOK or not CID:
-        print("Telegram token/chat_id yoxdur, mesajı keçdim.")
+TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+
+# ------------ Helpers ------------
+def send_telegram(text: str):
+    """Split-safe Telegram sender (HTML)."""
+    text = text.strip()
+    if not text:
         return
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TOK}/sendMessage",
+    # Telegram message limit ~4096
+    chunks = [text[i:i+3500] for i in range(0, len(text), 3500)]
+    for chunk in chunks:
+        resp = requests.post(
+            TG_API,
             data={
-                "chat_id": CID,
-                "text": text,
-                "disable_web_page_preview": True,
+                "chat_id": CHAT_ID,
+                "text": chunk,
                 "parse_mode": "HTML",
+                "disable_web_page_preview": True,
             },
             timeout=30,
         )
-        print("TG:", r.status_code, r.text[:160])
-    except Exception as e:
-        print("TG error:", e)
+        if resp.status_code != 200:
+            print("Telegram error:", resp.status_code, resp.text)
+        time.sleep(0.6)
 
-def match_kw(title: str) -> bool:
-    if not KW:
-        return True
-    t = (title or "").lower()
-    return any(k in t for k in KW)
 
-def fetch_reddit(max_items=50):
-    feed = feedparser.parse("https://www.reddit.com/r/all/.rss")
+def fmt_item(title: str, link: str, src: str) -> str:
+    title = html.escape(title or "").strip()
+    link = link.strip()
+    return f"• <b>{src}</b>: <a href=\"{link}\">{title}</a>"
+
+
+# ------------ Fetchers (RSS) ------------
+def fetch_reddit(keyword: str, max_items: int):
+    url = f"https://www.reddit.com/search.rss?q={quote_plus(keyword)}&sort=new"
+    d = feedparser.parse(url)
     out = []
-    for e in feed.entries:
-        title = unescape(e.get("title", ""))
-        link = e.get("link", "")
-        if match_kw(title):
+    for e in d.entries[:max_items]:
+        title = getattr(e, "title", "")
+        link = getattr(e, "link", "")
+        if title and link:
             out.append(("reddit", title, link))
-        if len(out) >= max_items:
-            break
-    print(f"reddit: {len(out)} nəticə toplandı.")
     return out
 
-def fetch_hackernews(max_items=50):
-    feed = feedparser.parse("https://hnrss.org/newest")
+
+def fetch_hn(keyword: str, max_items: int):
+    # hnrss.org – Algolia search
+    url = f"https://hnrss.org/newest?q={quote_plus(keyword)}"
+    d = feedparser.parse(url)
     out = []
-    for e in feed.entries:
-        title = unescape(e.get("title", ""))
-        link = e.get("link", "")
-        if match_kw(title):
-            out.append(("hackernews", title, link))
-        if len(out) >= max_items:
-            break
-    print(f"hackernews: {len(out)} nəticə toplandı.")
+    for e in d.entries[:max_items]:
+        title = getattr(e, "title", "")
+        link = getattr(e, "link", "")
+        if title and link:
+            out.append(("hn", title, link))
     return out
 
-def fetch_youtube(max_items=50):
-    feed = feedparser.parse("https://www.youtube.com/feeds/videos.xml?channel_id=UCVHFbqXqoYvEWM1Ddxl0QDg")
+
+def fetch_youtube(keyword: str, max_items: int):
+    # YouTube search RSS (rəsmi olmasa da işləyir)
+    url = f"https://www.youtube.com/feeds/videos.xml?search_query={quote_plus(keyword)}"
+    d = feedparser.parse(url)
     out = []
-    for e in feed.entries:
-        title = unescape(e.get("title", ""))
-        link = e.get("link", "")
-        if match_kw(title):
+    for e in d.entries[:max_items]:
+        title = getattr(e, "title", "")
+        link = getattr(e, "link", "")
+        if title and link:
             out.append(("youtube", title, link))
-        if len(out) >= max_items:
-            break
-    print(f"youtube: {len(out)} nəticə toplandı.")
     return out
 
-def fetch_placeholder(name: str, max_items=0):
+
+# Placeholder-lar (hazırda RSS yoxdur)
+def fetch_placeholder(name: str, *_args, **_kw):
+    # Burada heç nə qaytarmırıq – sadəcə atlayırıq
     print(f"{name}: rəsmi RSS yoxdur, atlanır.")
     return []
 
+
 FETCHERS = {
-    "reddit":        (lambda max_items=50: fetch_reddit(max_items)),
-    "hackernews":    (lambda max_items=50: fetch_hackernews(max_items)),
-    "youtube":       (lambda max_items=50: fetch_youtube(max_items)),
-    "producthunt":   (lambda max_items=50: fetch_placeholder("producthunt", max_items)),
-    "instagram":     (lambda max_items=50: fetch_placeholder("instagram", max_items)),
-    "tiktok":        (lambda max_items=50: fetch_placeholder("tiktok", max_items)),
-    "threads":       (lambda max_items=50: fetch_placeholder("threads", max_items)),
+    "reddit": fetch_reddit,
+    "hn": fetch_hn,            # Hacker News
+    "hackernews": fetch_hn,
+    "youtube": fetch_youtube,
+    "producthunt": lambda kw, n: fetch_placeholder("producthunt"),
+    "instagram": lambda kw, n: fetch_placeholder("instagram"),
+    "tiktok": lambda kw, n: fetch_placeholder("tiktok"),
+    "threads": lambda kw, n: fetch_placeholder("threads"),
 }
 
+# Hansılar aktivdirsə, sırala
+PLATFORMS = [p for p in ACTIVE_PLATFORMS.split(",") if p in FETCHERS]
+
+
+# ------------ Main ------------
 def main():
-    tg("🚀 Bot başladı. Aktiv platformalar: <b>%s</b> | limit: <b>%s</b>" %
-       (", ".join(PLATFORMS) if PLATFORMS else "hamısı (default)", LIMIT))
+    # Sürətli “ping”
+    send_telegram("✅ <b>GitHub Actions bot</b> başladı. Axtarışa keçirəm…")
 
-    items_all = []
-    active = PLATFORMS or list(FETCHERS.keys())
-    for p in active:
-        fn = FETCHERS.get(p, lambda max_items=50, name=p: fetch_placeholder(name, max_items))
-        try:
-            items = fn(max_items=LIMIT)
-        except Exception as e:
-            print(f"{p}: fetch xətası:", e)
-            items = []
-        items_all.extend(items)
+    total_sent = 0
+    report_lines = []
+    seen_links = set()
 
-    sent = 0
-    for src, title, link in items_all[:LIMIT]:
-        tg(f"🔎 <b>{src}</b>\n{title}\n{link}")
-        sent += 1
-        time.sleep(0.3)
+    for platform in PLATFORMS:
+        fn = FETCHERS[platform]
+        platform_count = 0
 
-    tg(f"✅ Bitdi. Göndərilən: <b>{sent}</b> xəbər.")
+        for kw in KEYWORDS:
+            if total_sent >= DAILY_LIMIT:
+                break
+            max_per_kw = max(1, min(10, DAILY_LIMIT - total_sent))
+            try:
+                items = fn(kw, max_per_kw)
+            except Exception as e:
+                print(f"{platform}/{kw} fetch error: {e}")
+                continue
+
+            for (_src, title, link) in items:
+                if total_sent >= DAILY_LIMIT:
+                    break
+                if link in seen_links:
+                    continue
+                seen_links.add(link)
+                report_lines.append(fmt_item(title, link, platform))
+                total_sent += 1
+                platform_count += 1
+
+        print(f"{platform}: {platform_count} nəticə toplandı.")
+
+    if report_lines:
+        header = f"🔎 <b>Axtarış tamamlandı</b>\n" \
+                 f"Platformalar: <code>{', '.join(PLATFORMS) or '—'}</code>\n" \
+                 f"Açar sözlər: <code>{', '.join(KEYWORDS) or '—'}</code>\n" \
+                 f"Limit: <code>{DAILY_LIMIT}</code>\n\n"
+        # Çox uzundursa bölüb göndər
+        payload = header + "\n".join(report_lines)
+        for chunk in textwrap.wrap(payload, 3500, break_long_words=False, break_on_hyphens=False):
+            send_telegram(chunk)
+    else:
+        send_telegram("ℹ️ Heç nə tapılmadı (RSS mənbələrində uyğun nəticə yoxdur).")
+
 
 if __name__ == "__main__":
     main()
