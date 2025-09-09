@@ -1,14 +1,13 @@
 name: Run Bot
 
 on:
-  workflow_dispatch: {}               # əl ilə Run düyməsi
+  workflow_dispatch:
   schedule:
-    - cron: "0 9,14,20 * * *"         # gündə 3 dəfə (UTC)
+    - cron: "0 9,14,20 * * *"   # gündə 3 dəfə (UTC vaxtı ilə)
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -16,29 +15,33 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install feedparser requests gspread google-auth google-auth-oauthlib google-auth-httplib2
+          pip install requests feedparser beautifulsoup4
 
-      # (opsional) Secrets-diagnoz – ilk dəfə işə salanda rahat debuq üçündür
-      - name: Check TELEGRAM_BOT_TOKEN
+      # 🔹 İşə düşəndə Telegram ping
+      - name: Debug ping Telegram (start)
         run: |
-          test -n "$TELEGRAM_BOT_TOKEN" && echo "Token set" || (echo "Token MISSING"; exit 1)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="✅ GitHub Actions bot başladı. Axtarışa keçirəm..."
 
       - name: Run script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          KEYWORDS:           ${{ secrets.KEYWORDS }}           # misal: ayaqqabı/paltar/phone
-          ACTIVE_PLATFORMS:   ${{ secrets.ACTIVE_PLATFORMS }}   # misal: reddit,youtube,hackernews,producthunt,instagram,tiktok,threads
-          DAILY_LIMIT:        ${{ secrets.DAILY_LIMIT }}        # misal: 200
-          RSSHUB_BASE:        ${{ secrets.RSSHUB_BASE }}        # misal: https://rsshub.app (opsional)
-          SHEETS_JSON:        ${{ secrets.SHEETS_JSON }}        # service account JSON (opsional)
-          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}  # opsional
-          SHEETS_WORKSHEET:   ${{ secrets.SHEETS_WORKSHEET }}   # misal: Sheet1 (opsional)
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
         run: python .github/workflows/main.py
+
+      # 🔹 İş bitəndə Telegram ping
+      - name: Debug ping Telegram (finish)
+        if: always()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="🏁 GitHub Actions bot bitdi."
