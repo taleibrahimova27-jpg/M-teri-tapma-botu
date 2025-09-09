@@ -1,234 +1,218 @@
-import os, csv, io, time
-from datetime import datetime, timezone
-import feedparser
-import requests
+# -*- coding: utf-8 -*-
+import os
+import re
+import sys
+import time
 import json
+import html
+import textwrap
+from typing import List, Dict
 
-# -------- Helpers --------
-def env(name, default=""):
-    v = os.getenv(name, default)
-    return v.strip() if isinstance(v, str) else v
+import requests
+import feedparser
+from bs4 import BeautifulSoup
 
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
 
-def split_keywords(s):
-    # "ayaqqabı/paltar/phone" -> ["ayaqqabı","paltar","phone"]
-    return [k.strip() for k in s.split("/") if k.strip()]
+# ------------- Konfiq -------------
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-def contains_kw(title, kws):
-    lt = (title or "").lower()
-    for k in kws:
-        if k.lower() in lt:
-            return True
-    return False
+ACTIVE_PLATFORMS = os.getenv("ACTIVE_PLATFORMS", "reddit,youtube,hackernews").lower()
+ACTIVE_PLATFORMS = [p.strip() for p in ACTIVE_PLATFORMS.split(",") if p.strip()]
 
-def fetch_rss(url, platform, kws, max_items=200):
-    try:
-        d = feedparser.parse(url)
-        items = []
-        for e in d.entries[:max_items]:
-            title = getattr(e, "title", "")
-            link  = getattr(e, "link", "")
-            summ  = getattr(e, "summary", "")
-            pub   = getattr(e, "published", "") or getattr(e, "updated", "")
-            ts    = getattr(e, "published_parsed", None) or getattr(e, "updated_parsed", None)
-            if kws and not contains_kw(f"{title} {summ}", kws):
-                continue
-            items.append({
-                "platform": platform,
-                "title": title,
-                "url": link,
-                "summary": summ,
-                "published": pub,
-                "timestamp": time.mktime(ts) if ts else 0,
-            })
-        print(f"{platform}: {len(items)} nəticə toplandı.")
-        return items
-    except Exception as e:
-        print(f"{platform}: RSS alınmadı -> {e}")
-        return []
+KEYWORDS_RAW = os.getenv("KEYWORDS", "")
+# vergül və ya yeni sətirə görə parçala
+KEYWORDS = [k.strip() for k in re.split(r"[,\n]+", KEYWORDS_RAW) if k.strip()]
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
 
-def tg_send(token, chat_id, text):
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
-            timeout=20,
-        )
-        ok = r.ok and r.json().get("ok", False)
-        if not ok:
-            print("Telegram cavabı:", r.text)
-        return ok
-    except Exception as e:
-        print("Telegram xətası:", e)
-        return False
-
-def write_csv(path, rows):
-    header = ["platform", "title", "url", "summary", "published", "collected_at"]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(header)
-        for r in rows:
-            w.writerow([r["platform"], r["title"], r["url"], r["summary"], r["published"], now_iso()])
-    print(f"CSV yazıldı: {path} ({len(rows)} sətir)")
-
-def write_google_sheets(rows):
-    sa_json = env("SHEETS_JSON")
-    ssid    = env("SHEETS_SPREADSHEET_ID")
-    wsname  = env("SHEETS_WORKSHEET", "Sheet1")
-    if not (sa_json and ssid):
-        print("Sheets açarları yoxdur, CSV ilə kifayətlənirəm.")
-        return False
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(json.loads(sa_json), scopes=scopes)
-        gc = gspread.authorize(creds)
-        sh = gc.open_by_key(ssid)
-        try:
-            ws = sh.worksheet(wsname)
-        except Exception:
-            ws = sh.add_worksheet(title=wsname, rows="1000", cols="6")
-
-        header = ["platform","title","url","summary","published","collected_at"]
-        if ws.row_count == 0 or (ws.cell(1,1).value or "").strip() != "platform":
-            ws.resize(1, 6)
-            ws.update("A1:F1", [header])
-
-        values = []
-        for r in rows:
-            values.append([
-                r["platform"], r["title"], r["url"], r["summary"], r["published"], now_iso()
-            ])
-
-        # limit 900 sətirlik toplu yazı
-        values = values[:900]
-        if values:
-            ws.append_rows(values, value_input_option="RAW")
-        print(f"Sheets yazıldı: {len(values)} sətir.")
-        return True
-    except Exception as e:
-        print("Sheets xətası:", e)
-        return False
-
-# -------- Config --------
-TOKEN   = env("TELEGRAM_BOT_TOKEN")
-CHAT_ID = env("TELEGRAM_CHAT_ID")
-KW_RAW  = env("KEYWORDS", "")
-PLAT_RAW= env("ACTIVE_PLATFORMS", "reddit,youtube,hackernews")
-DAILY_LIMIT = int(env("DAILY_LIMIT", "200"))
-RSSHUB = env("RSSHUB_BASE", "https://rsshub.app")
-
-KEYWORDS = split_keywords(KW_RAW)
-PLATFORMS = [p.strip().lower() for p in PLAT_RAW.split(",") if p.strip()]
-
-print(f"ENV check: TOK={'OK' if TOKEN else 'MISSING'} CID={'OK' if CHAT_ID else 'MISSING'}")
-print(f"Platforms={PLATFORMS} | KW={KEYWORDS} | LIMIT={DAILY_LIMIT}")
-
-# -------- Platform fetchers (RSS-only) --------
-def fetch_reddit():
-    items = []
-    for kw in KEYWORDS or ["news"]:
-        url = f"https://www.reddit.com/search.rss?q={requests.utils.quote(kw)}&sort=new"
-        items += fetch_rss(url, "reddit", KEYWORDS, max_items=DAILY_LIMIT)
-    return items
-
-def fetch_youtube():
-    items = []
-    for kw in KEYWORDS or ["news"]:
-        url = f"https://www.youtube.com/feeds/videos.xml?search_query={requests.utils.quote(kw)}"
-        items += fetch_rss(url, "youtube", KEYWORDS, max_items=DAILY_LIMIT)
-    return items
-
-def fetch_hackernews():
-    items = []
-    for kw in KEYWORDS or ["news"]:
-        url = f"https://hnrss.org/newest?q={requests.utils.quote(kw)}"
-        items += fetch_rss(url, "hackernews", KEYWORDS, max_items=DAILY_LIMIT)
-    return items
-
-def fetch_producthunt():
-    # RSSHub: producthunt/today
-    url = f"{RSSHUB}/producthunt/today"
-    return fetch_rss(url, "producthunt", KEYWORDS, max_items=DAILY_LIMIT)
-
-def fetch_instagram():
-    # RSSHub tələb edir: user adı lazımdır -> SECRET INSTAGRAM_USERS="user1,user2"
-    users = [u.strip() for u in env("INSTAGRAM_USERS","").split(",") if u.strip()]
-    if not users:
-        print("instagram: istifadəçi siyahısı (INSTAGRAM_USERS) yoxdur, atlanır.")
-        return []
-    items = []
-    for u in users:
-        url = f"{RSSHUB}/instagram/user/{u}"
-        items += fetch_rss(url, "instagram", KEYWORDS, max_items=DAILY_LIMIT)
-    return items
-
-def fetch_tiktok():
-    users = [u.strip() for u in env("TIKTOK_USERS","").split(",") if u.strip()]
-    if not users:
-        print("tiktok: istifadəçi siyahısı (TIKTOK_USERS) yoxdur, atlanır.")
-        return []
-    items = []
-    for u in users:
-        url = f"{RSSHUB}/tiktok/user/{u}"
-        items += fetch_rss(url, "tiktok", KEYWORDS, max_items=DAILY_LIMIT)
-    return items
-
-def fetch_threads():
-    users = [u.strip() for u in env("THREADS_USERS","").split(",") if u.strip()]
-    if not users:
-        print("threads: istifadəçi siyahısı (THREADS_USERS) yoxdur, atlanır.")
-        return []
-    items = []
-    for u in users:
-        url = f"{RSSHUB}/threads/user/{u}"
-        items += fetch_rss(url, "threads", KEYWORDS, max_items=DAILY_LIMIT)
-    return items
-
-FETCHERS = {
-    "reddit": fetch_reddit,
-    "youtube": fetch_youtube,
-    "hackernews": fetch_hackernews,
-    "producthunt": fetch_producthunt,
-    "instagram": fetch_instagram,
-    "tiktok": fetch_tiktok,
-    "threads": fetch_threads,
+# RSS mənbələri (açarlar platforma adları ilə eyni olmalıdır)
+FEEDS: Dict[str, List[str]] = {
+    "reddit": [
+        # Populyar “new” axını (ürək sözləri ilə filtrləyəcəyik)
+        "https://www.reddit.com/r/all/new/.rss",
+        # İstəsən bura əlavə alt-reddit RSS-ləri də ata bilərsən
+    ],
+    "youtube": [
+        # Trend/keyword RSS yoxdur; amma YouTube search RSS işləyir:
+        # Aşağıda run vaxtı hər açar söz üçün ayrıca feed quracağıq.
+        # Placeholder — boş saxlayırıq, dinamik qurulacaq
+    ],
+    "hackernews": [
+        "https://hnrss.org/newest"
+    ],
 }
 
+# ------------- Yardımçılar -------------
+def log(msg: str):
+    print(msg, flush=True)
+
+def send_telegram(text: str):
+    if not BOT_TOKEN or not CHAT_ID:
+        log("Telegram token/chat_id yoxdur, mesaj atlanır.")
+        return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        r = requests.post(url, data=payload, timeout=20)
+        if r.status_code != 200:
+            log(f"Telegram ERROR {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        log(f"Telegram istisna: {e}")
+
+def norm(s: str) -> str:
+    return html.unescape(s or "").strip()
+
+def text_matches(s: str, keywords: List[str]) -> bool:
+    s_low = s.lower()
+    return any(k.lower() in s_low for k in keywords)
+
+def clean_summary(summary_html: str) -> str:
+    if not summary_html:
+        return ""
+    txt = BeautifulSoup(summary_html, "html.parser").get_text(" ")
+    return re.sub(r"\s+", " ", txt).strip()
+
+def limit_and_dedup(items: List[dict], limit: int) -> List[dict]:
+    seen = set()
+    out = []
+    for it in items:
+        u = it.get("link") or it.get("url")
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(it)
+        if len(out) >= limit:
+            break
+    return out
+
+# ------------- Toplayıcılar -------------
+def fetch_rss(url: str) -> feedparser.FeedParserDict:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (GitHubActions RSS bot)"
+    }
+    # feedparser öz-özünə yükləyir; headers üçün requests-lə çəkib feedparser.parse(content) də edə bilərdik
+    return feedparser.parse(url)
+
+def collect_from_feeds(platform: str, feeds: List[str], keywords: List[str], limit: int) -> List[dict]:
+    results = []
+    for url in feeds:
+        try:
+            d = fetch_rss(url)
+            for e in d.entries:
+                title = norm(getattr(e, "title", ""))
+                link  = norm(getattr(e, "link", ""))
+                summ  = clean_summary(getattr(e, "summary", ""))
+                blob  = f"{title}\n{summ}"
+
+                if keywords and not text_matches(blob, keywords):
+                    continue
+
+                results.append({
+                    "platform": platform,
+                    "title": title or "(no title)",
+                    "link": link,
+                    "summary": summ,
+                })
+        except Exception as ex:
+            log(f"{platform}: feed xətası: {ex}")
+    # təkrarlananları at və limiti tətbiq et
+    return limit_and_dedup(results, limit)
+
+def collect_reddit(keywords: List[str], limit: int) -> List[dict]:
+    log("reddit: yüklənir…")
+    return collect_from_feeds("reddit", FEEDS["reddit"], keywords, limit)
+
+def collect_hn(keywords: List[str], limit: int) -> List[dict]:
+    log("hackernews: yüklənir…")
+    return collect_from_feeds("hackernews", FEEDS["hackernews"], keywords, limit)
+
+def collect_youtube(keywords: List[str], limit: int) -> List[dict]:
+    log("youtube: yüklənir…")
+    # YouTube search RSS: https://www.youtube.com/feeds/videos.xml?search_query=QUERY
+    # Hər açar söz üçün ayrı feed
+    items = []
+    kws = keywords if keywords else [""]
+    for kw in kws:
+        q = requests.utils.quote(kw)
+        url = f"https://www.youtube.com/feeds/videos.xml?search_query={q}"
+        try:
+            d = fetch_rss(url)
+            for e in d.entries:
+                title = norm(getattr(e, "title", ""))
+                link  = norm(getattr(e, "link", ""))
+                summ  = clean_summary(getattr(e, "summary", ""))
+                blob  = f"{title}\n{summ}"
+                # əgər keywords boş deyilsə, yenə də yoxla (çünki youtube feed məhz həmin keyword-la gəlir,
+                # amma yenə də təhlükəsizlik üçün)
+                if keywords and not text_matches(blob, keywords):
+                    continue
+
+                items.append({
+                    "platform": "youtube",
+                    "title": title or "(no title)",
+                    "link": link,
+                    "summary": summ,
+                })
+        except Exception as ex:
+            log(f"youtube: feed xətası: {ex}")
+
+    return limit_and_dedup(items, limit)
+
+COLLECTORS = {
+    "reddit": collect_reddit,
+    "youtube": collect_youtube,
+    "hackernews": collect_hn,
+}
+
+# ------------- Mesaj formatı -------------
+def format_item(it: dict) -> str:
+    title = it["title"]
+    link  = it["link"]
+    plat  = it["platform"]
+    # başlığı qısa saxla
+    title = (title[:200] + "…") if len(title) > 200 else title
+    return f"• <b>{html.escape(title)}</b>\n🔗 {link}\n#{plat}"
+
+def send_batch(platform: str, items: List[dict]):
+    if not items:
+        send_telegram(f"ℹ️ <b>{platform}</b> üçün uyğun nəticə tapılmadı.")
+        return
+    header = f"✅ <b>{platform}</b> — {len(items)} nəticə"
+    send_telegram(header)
+    for it in items:
+        send_telegram(format_item(it))
+        time.sleep(0.7)  # flood-limitdən qaçmaq üçün bir az gecikmə
+
+# ------------- Main -------------
 def main():
-    all_items = []
-    for p in PLATFORMS:
-        fn = FETCHERS.get(p)
-        if fn:
-            all_items += fn()
-        else:
-            print(f"{p}: dəstəklənmir, atlanır.")
+    log(f"ENV: platforms={ACTIVE_PLATFORMS} keywords={KEYWORDS} limit={DAILY_LIMIT}")
 
-    # tarixə görə azalan sırala
-    all_items.sort(key=lambda r: r.get("timestamp", 0), reverse=True)
+    if not BOT_TOKEN or not CHAT_ID:
+        log("Telegram SECRET-lər yoxdur. Dayandırılır.")
+        sys.exit(0)
 
-    # Telegram-a TOP 20
-    top20 = all_items[:20]
-    if TOKEN and CHAT_ID and top20:
-        lines = ["🧾 TOP 20 tapıntı:"]
-        for i, r in enumerate(top20, 1):
-            title = (r["title"] or "")[:120]
-            lines.append(f"{i}. [{r['platform']}] {title}\n{r['url']}")
-        msg = "\n\n".join(lines)
-        tg_send(TOKEN, CHAT_ID, msg)
-    elif not top20:
-        print("Uyğun nəticə yoxdur, Telegrama göndərmirəm.")
-    else:
-        print("Telegram token/chat_id yoxdur, mesajı ötürürəm.")
+    # Limit platformalar arasında paylansın (təxmini bərabər)
+    per_platform = max(1, DAILY_LIMIT // max(1, len(ACTIVE_PLATFORMS)))
 
-    # Sheets və ya CSV (max 900 sətir)
-    bulk = all_items[:900]
-    wrote_sheets = write_google_sheets(bulk)
-    if not wrote_sheets:
-        write_csv("results.csv", bulk)
+    for plat in ACTIVE_PLATFORMS:
+        fn = COLLECTORS.get(plat)
+        if not fn:
+            log(f"{plat}: tanınmır, atlanır.")
+            continue
+        try:
+            items = fn(KEYWORDS, per_platform)
+            log(f"{plat}: {len(items)} nəticə toplandı.")
+            send_batch(plat, items)
+        except Exception as e:
+            log(f"{plat}: collector xətası: {e}")
+            send_telegram(f"⚠️ <b>{plat}</b> üçün xətaya düşdüm: {html.escape(str(e))}")
+
+    send_telegram("🟢 Axtarış tamamlandı.")
 
 if __name__ == "__main__":
     main()
