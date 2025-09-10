@@ -1,45 +1,83 @@
 name: Run Bot
+
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 9,14,20 * * *"
+  workflow_dispatch:      # əl ilə işə salmaq üçün
+  schedule:               # (istəsən saxla) gündə 3 dəfə
+    - cron: '0 9,14,20 * * *'
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
-      - name: Setup Python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.10'
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser beautifulsoup4
-          pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
+          pip install requests feedparser beautifulsoup4 \
+                     google-api-python-client google-auth \
+                     google-auth-httplib2 google-auth-oauthlib
 
+      # SECRET-lərin yerində olub-olmadığını yoxla
       - name: Check secrets
         shell: bash
+        env:
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          TOP_N_TELEGRAM:        ${{ secrets.TOP_N_TELEGRAM }}
+          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
+          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
+          GCP_SA_KEY:            ${{ secrets.GCP_SA_KEY }}
+          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
+          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS:              ${{ secrets.KEYWORDS }}
         run: |
-          test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING" && exit 1)
-          test -n "${{ secrets.GCP_SA_KEY }}" || (echo "GCP_SA_KEY MISSING" && exit 1)
-          test -n "${{ secrets.SHEETS_TAB }}" || (echo "SHEETS_TAB MISSING" && exit 1)
-          echo "Secrets OK"
+          missing=0
+          check() { var="$1"; val="${!1}"; if [[ -z "$val" ]]; then echo "::error::$var MISSING"; missing=1; fi; }
+          # Sheets yazmaq üçün mütləq gərəkli
+          check SHEETS_SPREADSHEET_ID
+          check GCP_SA_KEY
+          # tövsiyə olunanlar
+          check DAILY_LIMIT
+          check TOP_N_TELEGRAM
+          # Telegram boşdursa sadəcə xəbərdarlıq – skript Sheets-ə yazmağa davam edəcək
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "::warning::Telegram secrets boşdur. Mesaj göndərmə addımı SKIP ediləcək."
+          fi
+          if [[ $missing -eq 1 ]]; then exit 1; fi
+          echo "All required secrets are present."
+
+      # GCP service account açarını fayla yazırıq və doğrulayırıq
+      - name: Write service account key
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          echo "$GCP_SA_KEY" > sa_key.json
+          python - <<'PY'
+import json, sys
+data = open("sa_key.json","r",encoding="utf-8").read()
+json.loads(data)
+print("Service account JSON OK, length:", len(data))
+PY
 
       - name: Run script
         env:
           TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
-          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:              ${{ secrets.KEYWORDS }}
-          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
           TOP_N_TELEGRAM:        ${{ secrets.TOP_N_TELEGRAM }}
-          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
+          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
           SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
           SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
-          GCP_SA_KEY:            ${{ secrets.GCP_SA_KEY }}
+          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
+          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS:              ${{ secrets.KEYWORDS }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/sa_key.json
         run: python .github/workflows/main.py
