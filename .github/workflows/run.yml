@@ -1,20 +1,19 @@
 name: Run Bot
 
 on:
-  workflow_dispatch:      # əl ilə işə salmaq üçün
-  schedule:               # (istəsən saxla) gündə 3 dəfə
-    - cron: '0 9,14,20 * * *'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 9,14,20 * * *'   # gündə 3 dəfə (UTC)
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -25,59 +24,50 @@ jobs:
                      google-api-python-client google-auth \
                      google-auth-httplib2 google-auth-oauthlib
 
-      # SECRET-lərin yerində olub-olmadığını yoxla
-      - name: Check secrets
-        shell: bash
-        env:
-          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
-          TOP_N_TELEGRAM:        ${{ secrets.TOP_N_TELEGRAM }}
-          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
-          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
-          GCP_SA_KEY:            ${{ secrets.GCP_SA_KEY }}
-          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
-          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:              ${{ secrets.KEYWORDS }}
+      # GCP_SA_KEY secret-indəki JSON məzmunu fayla yazırıq
+      - name: Write service account key
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        run: |
+          echo '${{ secrets.GCP_SA_KEY }}' > sa_key.json
+          python - <<'PY'
+import json; json.load(open("sa_key.json")); print("OK: sa_key.json valid")
+PY
+
+      - name: Check required secrets
         run: |
           missing=0
-          check() { var="$1"; val="${!1}"; if [[ -z "$val" ]]; then echo "::error::$var MISSING"; missing=1; fi; }
-          # Sheets yazmaq üçün mütləq gərəkli
-          check SHEETS_SPREADSHEET_ID
-          check GCP_SA_KEY
-          # tövsiyə olunanlar
-          check DAILY_LIMIT
-          check TOP_N_TELEGRAM
-          # Telegram boşdursa sadəcə xəbərdarlıq – skript Sheets-ə yazmağa davam edəcək
-          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
-            echo "::warning::Telegram secrets boşdur. Mesaj göndərmə addımı SKIP ediləcək."
-          fi
-          if [[ $missing -eq 1 ]]; then exit 1; fi
-          echo "All required secrets are present."
+          check() { v="$1"; n="$2"; if [ -z "$v" ]; then
+            echo "::error title=Secret missing::$n is not set"; missing=1; fi; }
+          check "${{ secrets.SHEETS_SPREADSHEET_ID }}" SHEETS_SPREADSHEET_ID
+          check "${{ secrets.SHEETS_TAB }}"            SHEETS_TAB
+          check "${{ secrets.GCP_SA_KEY }}"            GCP_SA_KEY
+          if [ $missing -ne 0 ]; then exit 1; fi
 
-      # GCP service account açarını fayla yazırıq və doğrulayırıq
-      - name: Write service account key
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      - name: Send Telegram ping (optional)
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
         run: |
-          echo "$GCP_SA_KEY" > sa_key.json
-          python - <<'PY'
-import json, sys
-data = open("sa_key.json","r",encoding="utf-8").read()
-json.loads(data)
-print("Service account JSON OK, length:", len(data))
-PY
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="✅ GitHub Actions başladı. Axtarışa keçirəm…"
 
       - name: Run script
         env:
-          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
-          TOP_N_TELEGRAM:        ${{ secrets.TOP_N_TELEGRAM }}
-          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
-          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
-          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
-          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:              ${{ secrets.KEYWORDS }}
+          TELEGRAM_BOT_TOKEN:           ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:             ${{ secrets.TELEGRAM_CHAT_ID }}
+          TOP_N_TELEGRAM:               ${{ secrets.TOP_N_TELEGRAM }}
+          DAILY_LIMIT:                  ${{ secrets.DAILY_LIMIT }}
+          ACTIVE_PLATFORMS:             ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS:                     ${{ secrets.KEYWORDS }}
+          RSSHUB_BASE:                  ${{ secrets.RSSHUB_BASE }}
+          SHEETS_SPREADSHEET_ID:        ${{ secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB:                   ${{ secrets.SHEETS_TAB }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/sa_key.json
-        run: python .github/workflows/main.py
+        run: |
+          python .github/workflows/main.py
+
+      - name: Send Telegram done (optional)
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="🏁 GitHub Actions bot bitdi."
