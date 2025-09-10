@@ -1,72 +1,59 @@
-name: Run Bot
+name: run
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 9,14,20 * * *'   # gündə 3 dəfə (UTC)
+    - cron: "0 */6 * * *"   # hər 6 saatdan bir işləsin
 
 jobs:
-  run:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser beautifulsoup4 \
-                     google-api-python-client google-auth \
-                     google-auth-httplib2 google-auth-oauthlib
+          pip install -r requirements.txt
 
       - name: Write service account key
         run: |
-          echo '${{ secrets.GCP_SA_KEY }}' > sa_key.json
+          echo "${{ secrets.GCP_SA_KEY }}" > gcp_key.json
 
       - name: Check required secrets
+        shell: bash
         run: |
-          test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1)
-          test -n "${{ secrets.SHEETS_TAB }}" || (echo "SHEETS_TAB MISSING"; exit 1)
-          test -n "${{ secrets.GCP_SA_KEY }}" || (echo "GCP_SA_KEY MISSING"; exit 1)
-
-      # Telegram secretləri varsa flag qururuq (HAS_TG=1)
-      - name: Set flags
-        run: |
-          if [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
-            echo "HAS_TG=1" >> $GITHUB_ENV
-          else
-            echo "HAS_TG=0" >> $GITHUB_ENV
+          if [[ -z "${{ secrets.SHEETS_SPREADSHEET_ID }}" ]]; then
+            echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1
           fi
-
-      - name: Telegram ping (optional)
-        if: ${{ env.HAS_TG == '1' }}
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="✅ GitHub Actions başladı. Axtarışa keçirəm…"
+          if [[ -z "${{ secrets.SHEETS_TAB }}" ]]; then
+            echo "SHEETS_TAB MISSING"; exit 1
+          fi
+          if [[ -z "${{ secrets.GCP_SA_KEY }}" ]]; then
+            echo "GCP_SA_KEY MISSING"; exit 1
+          fi
 
       - name: Run script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          TOP_N_TELEGRAM:     ${{ secrets.TOP_N_TELEGRAM }}
-          DAILY_LIMIT:        ${{ secrets.DAILY_LIMIT }}
-          ACTIVE_PLATFORMS:   ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:           ${{ secrets.KEYWORDS }}
-          RSSHUB_BASE:        ${{ secrets.RSSHUB_BASE }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB:         ${{ secrets.SHEETS_TAB }}
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/sa_key.json
-        run: python .github/workflows/main.py
-
-      - name: Telegram done (optional)
-        if: ${{ env.HAS_TG == '1' }}
+          SHEETS_TAB: ${{ secrets.SHEETS_TAB }}
+          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
+          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          RSSHUB_BASE: ${{ secrets.RSSHUB_BASE }}
+          INSTAGRAM_USER: ${{ secrets.INSTAGRAM_USER }}
+          INSTAGRAM_PASS: ${{ secrets.INSTAGRAM_PASS }}
+          TIKTOK_USER: ${{ secrets.TIKTOK_USER }}
+          TIKTOK_PASS: ${{ secrets.TIKTOK_PASS }}
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="🏁 GitHub Actions bot bitdi."
+          python main.py
