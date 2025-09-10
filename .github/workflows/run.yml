@@ -24,20 +24,27 @@ jobs:
                      google-api-python-client google-auth \
                      google-auth-httplib2 google-auth-oauthlib
 
-      # GCP_SA_KEY (JSON) fayla yazılır
       - name: Write service account key
         run: |
           echo '${{ secrets.GCP_SA_KEY }}' > sa_key.json
 
-      # Vacib secretləri yoxla
       - name: Check required secrets
         run: |
           test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1)
           test -n "${{ secrets.SHEETS_TAB }}" || (echo "SHEETS_TAB MISSING"; exit 1)
           test -n "${{ secrets.GCP_SA_KEY }}" || (echo "GCP_SA_KEY MISSING"; exit 1)
 
+      # Telegram secretləri varsa flag qururuq (HAS_TG=1)
+      - name: Set flags
+        run: |
+          if [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
+            echo "HAS_TG=1" >> $GITHUB_ENV
+          else
+            echo "HAS_TG=0" >> $GITHUB_ENV
+          fi
+
       - name: Telegram ping (optional)
-        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+        if: ${{ env.HAS_TG == '1' }}
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
@@ -58,7 +65,7 @@ jobs:
         run: python .github/workflows/main.py
 
       - name: Telegram done (optional)
-        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+        if: ${{ env.HAS_TG == '1' }}
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
