@@ -3,50 +3,43 @@ name: Run Bot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 9,14,20 * * *"   # gündə 3 dəfə (UTC)
+    - cron: "0 9,14,20 * * *"   # istəsən dəyiş
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install requests feedparser beautifulsoup4
-          pip install gspread google-auth
+          pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
 
-      # Başlanğıc ping (debug üçün)
-      - name: Debug ping Telegram (start)
+      # (Opsional) Secret-lərin yerində olduğunu yoxla – sırf diaqnostika üçün
+      - name: Check required secrets briefly
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="✅ Bot başladı (Sheets aktiv: ${{ secrets.SHEETS_ENABLED }})"
+          test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING" && exit 1)
+          test -n "${{ secrets.GCP_SA_KEY }}" || (echo "GCP_SA_KEY MISSING" && exit 1)
+        shell: bash
 
       - name: Run script
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          ACTIVE_PLATFORMS:   ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:           ${{ secrets.KEYWORDS }}
-          DAILY_LIMIT:        ${{ secrets.DAILY_LIMIT }}
-          # Sheets
-          SHEETS_ENABLED:     ${{ secrets.SHEETS_ENABLED }}
-          SHEET_ID:           ${{ secrets.SHEET_ID }}
-          GCP_SA_KEY:         ${{ secrets.GCP_SA_KEY }}
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACTIVE_PLATFORMS:     ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS:             ${{ secrets.KEYWORDS }}
+          DAILY_LIMIT:          ${{ secrets.DAILY_LIMIT }}
+          TOP_N_TELEGRAM:       ${{ secrets.TOP_N_TELEGRAM }}
+          RSSHUB_BASE:          ${{ secrets.RSSHUB_BASE }}
+          SHEETS_SPREADSHEET_ID:${{ secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB:           ${{ secrets.SHEETS_TAB }}
+          GCP_SA_KEY:           ${{ secrets.GCP_SA_KEY }}
         run: python .github/workflows/main.py
-
-      # Bitiş ping (debug üçün)
-      - name: Debug ping Telegram (finish)
-        if: always()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="🏁 Bot bitdi"
