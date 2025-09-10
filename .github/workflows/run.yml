@@ -8,7 +8,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -18,42 +17,48 @@ jobs:
         with:
           python-version: "3.10"
 
+      # requirements.txt OLMASA da işləsin deyə, lazımi paketləri birbaşa quraşdırırıq
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install \
+            requests \
+            feedparser \
+            beautifulsoup4 \
+            google-api-python-client \
+            google-auth \
+            google-auth-httplib2 \
+            google-auth-oauthlib \
+            gspread \
+            python-dateutil
 
+      # SA JSON-u fayla yazırıq
       - name: Write service account key
         run: |
           echo "${{ secrets.GCP_SA_KEY }}" > gcp_key.json
 
+      # Vacib sirlər yoxlanışı
       - name: Check required secrets
         shell: bash
         run: |
-          if [[ -z "${{ secrets.SHEETS_SPREADSHEET_ID }}" ]]; then
-            echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1
-          fi
-          if [[ -z "${{ secrets.SHEETS_TAB }}" ]]; then
-            echo "SHEETS_TAB MISSING"; exit 1
-          fi
-          if [[ -z "${{ secrets.GCP_SA_KEY }}" ]]; then
-            echo "GCP_SA_KEY MISSING"; exit 1
-          fi
+          if [[ -z "${{ secrets.SHEETS_SPREADSHEET_ID }}" ]]; then echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1; fi
+          if [[ -z "${{ secrets.SHEETS_TAB }}" ]]; then echo "SHEETS_TAB MISSING"; exit 1; fi
+          if [[ -z "${{ secrets.GCP_SA_KEY }}" ]]; then echo "GCP_SA_KEY MISSING"; exit 1; fi
 
       - name: Run script
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          GCP_SA_KEY:            ${{ secrets.GCP_SA_KEY }}
           SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB: ${{ secrets.SHEETS_TAB }}
-          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
-          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS: ${{ secrets.KEYWORDS }}
-          RSSHUB_BASE: ${{ secrets.RSSHUB_BASE }}
-          INSTAGRAM_USER: ${{ secrets.INSTAGRAM_USER }}
-          INSTAGRAM_PASS: ${{ secrets.INSTAGRAM_PASS }}
-          TIKTOK_USER: ${{ secrets.TIKTOK_USER }}
-          TIKTOK_PASS: ${{ secrets.TIKTOK_PASS }}
+          SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
+          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
+          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS:              ${{ secrets.KEYWORDS }}
+          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
+          INSTAGRAM_USER:        ${{ secrets.INSTAGRAM_USER }}
+          INSTAGRAM_PASS:        ${{ secrets.INSTAGRAM_PASS }}
+          TIKTOK_USER:           ${{ secrets.TIKTOK_USER }}
+          TIKTOK_PASS:           ${{ secrets.TIKTOK_PASS }}
         run: |
           python main.py
