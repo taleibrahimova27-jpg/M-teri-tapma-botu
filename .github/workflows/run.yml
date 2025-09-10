@@ -1,21 +1,20 @@
 name: Run Bot
-
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 9,14,20 * * *"   # istəsən dəyiş
+    - cron: "0 9,14,20 * * *"
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install deps
         run: |
@@ -23,23 +22,24 @@ jobs:
           pip install requests feedparser beautifulsoup4
           pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
 
-      # (Opsional) Secret-lərin yerində olduğunu yoxla – sırf diaqnostika üçün
-      - name: Check required secrets briefly
+      - name: Check secrets
+        shell: bash
         run: |
           test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING" && exit 1)
           test -n "${{ secrets.GCP_SA_KEY }}" || (echo "GCP_SA_KEY MISSING" && exit 1)
-        shell: bash
+          test -n "${{ secrets.SHEETS_TAB }}" || (echo "SHEETS_TAB MISSING" && exit 1)
+          echo "Secrets OK"
 
       - name: Run script
         env:
-          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
-          ACTIVE_PLATFORMS:     ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:             ${{ secrets.KEYWORDS }}
-          DAILY_LIMIT:          ${{ secrets.DAILY_LIMIT }}
-          TOP_N_TELEGRAM:       ${{ secrets.TOP_N_TELEGRAM }}
-          RSSHUB_BASE:          ${{ secrets.RSSHUB_BASE }}
-          SHEETS_SPREADSHEET_ID:${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB:           ${{ secrets.SHEETS_TAB }}
-          GCP_SA_KEY:           ${{ secrets.GCP_SA_KEY }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
+          KEYWORDS:              ${{ secrets.KEYWORDS }}
+          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
+          TOP_N_TELEGRAM:        ${{ secrets.TOP_N_TELEGRAM }}
+          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
+          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
+          GCP_SA_KEY:            ${{ secrets.GCP_SA_KEY }}
         run: python .github/workflows/main.py
