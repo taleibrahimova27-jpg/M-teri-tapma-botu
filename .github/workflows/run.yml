@@ -56,10 +56,4 @@ jobs:
           echo "PWD=$(pwd)"
           ls -la
 
-      - name: Run script
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp_key.json
-          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT || '250' }}
-          TOP_N_TELEGRAM: ${{ secrets.TOP_N_TELEGRAM || '20' }}
-        run: |
-          python ./main.py
+      python bot/main.py
