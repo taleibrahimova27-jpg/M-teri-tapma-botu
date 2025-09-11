@@ -1,54 +1,49 @@
 name: build
-
 on:
-  push:
-    branches: [ main ]
-  schedule:
-    - cron: "0 */6 * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "0 */4 * * *"   # hər 4 saatdan bir (istədiyin kimi dəyiş)
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      # ⬇️ requirements.txt YOXDUR deyə paketləri birbaşa quraşdırırıq
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser google-api-python-client google-auth google-auth-httplib2
+          pip install -r requirements.txt
 
+      # GCP service account JSON-u fayla yazırıq
       - name: Write service account key
         run: |
-          echo "${{ secrets.GCP_SA_KEY }}" > $GITHUB_WORKSPACE/key.json
+          echo '${{ secrets.GCP_SA_KEY }}' > gcp_sa.json
 
+      # Vacib secret-lər yoxlaması
       - name: Check required secrets
+        shell: bash
         run: |
-          if [ -z "${{ secrets.SHEETS_SPREADSHEET_ID }}" ]; then echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1; fi
-          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then echo "GCP_SA_KEY MISSING"; exit 1; fi
+          test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1)
+          test -n "${{ secrets.GCP_SA_KEY }}" || (echo "GCP_SA_KEY MISSING"; exit 1)
 
       - name: Run script
         env:
-          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
-          DAILY_LIMIT:           ${{ secrets.DAILY_LIMIT }}
-          ACTIVE_PLATFORMS:      ${{ secrets.ACTIVE_PLATFORMS }}
-          KEYWORDS:              ${{ secrets.KEYWORDS }}
-          RSSHUB_BASE:           ${{ secrets.RSSHUB_BASE }}
-          INSTAGRAM_USER:        ${{ secrets.INSTAGRAM_USER }}
-          INSTAGRAM_PASS:        ${{ secrets.INSTAGRAM_PASS }}
-          TIKTOK_USER:           ${{ secrets.TIKTOK_USER }}
-          TIKTOK_PASS:           ${{ secrets.TIKTOK_PASS }}
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/key.json
+          SHEETS_TAB: ${{ secrets.SHEETS_TAB }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
+          TOP_N_TELEGRAM: ${{ secrets.TOP_N_TELEGRAM }}
+          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
+          RSSHUB_BASE: ${{ secrets.RSSHUB_BASE }}
+          GCP_SA_PATH: gcp_sa.json
         run: |
-          python .github/workflows/main.py
+          python main.py
