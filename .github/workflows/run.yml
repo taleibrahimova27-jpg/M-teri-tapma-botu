@@ -1,12 +1,19 @@
 name: build
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"   # hər 4 saatdan bir (istədiyin kimi dəyiş)
+    - cron: "0 7,13,19 * * *"   # gündə 3 dəfə
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp_key.json
+      DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
+      TOP_N_TELEGRAM: ${{ secrets.TOP_N_TELEGRAM }}
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -19,31 +26,32 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install --no-cache-dir \
+            requests feedparser beautifulsoup4 lxml \
+            pandas gspread google-auth google-auth-httplib2
 
-      # GCP service account JSON-u fayla yazırıq
       - name: Write service account key
         run: |
-          echo '${{ secrets.GCP_SA_KEY }}' > gcp_sa.json
+          echo '${{ secrets.GCP_SA_KEY }}' > "${GOOGLE_APPLICATION_CREDENTIALS}"
 
-      # Vacib secret-lər yoxlaması
       - name: Check required secrets
-        shell: bash
         run: |
           test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1)
-          test -n "${{ secrets.GCP_SA_KEY }}" || (echo "GCP_SA_KEY MISSING"; exit 1)
+          test -n "${{ secrets.SHEETS_TAB }}" || (echo "SHEETS_TAB MISSING"; exit 1)
+
+      - name: Set flags (optional)
+        run: |
+          echo "DAILY_LIMIT=${DAILY_LIMIT:-900}"
+          echo "TOP_N_TELEGRAM=${TOP_N_TELEGRAM:-20}"
 
       - name: Run script
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
           SHEETS_TAB: ${{ secrets.SHEETS_TAB }}
-          KEYWORDS: ${{ secrets.KEYWORDS }}
-          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT }}
-          TOP_N_TELEGRAM: ${{ secrets.TOP_N_TELEGRAM }}
-          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           RSSHUB_BASE: ${{ secrets.RSSHUB_BASE }}
-          GCP_SA_PATH: gcp_sa.json
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          ACTIVE_PLATFORMS: ${{ secrets.ACTIVE_PLATFORMS }}
         run: |
           python main.py
