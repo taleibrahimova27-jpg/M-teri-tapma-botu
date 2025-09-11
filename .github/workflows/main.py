@@ -1,238 +1,207 @@
-import os, json, time, html, re
-import requests
-import feedparser
+# main.py
+# Multi-platform lead collector -> Sheets + Telegram (TOP N)
+import os, time, hashlib, requests, html
 from datetime import datetime, timezone
+from urllib.parse import quote
 
-# -------- Settings from env --------
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
-SHEET_ID           = os.getenv("SHEETS_SPREADSHEET_ID")
-SHEET_TAB          = os.getenv("SHEETS_TAB", "leads")
-KEYWORDS_RAW       = os.getenv("KEYWORDS", "iphone,ai,saas")
-DAILY_LIMIT        = int(os.getenv("DAILY_LIMIT", "900"))
-TOP_N_TELEGRAM     = int(os.getenv("TOP_N_TELEGRAM", "20"))
-ACTIVE_PLATFORMS   = [s.strip().lower() for s in os.getenv("ACTIVE_PLATFORMS", "hackernews,producthunt,reddit,youtube,instagram,tiktok").split(",") if s.strip()]
-RSSHUB_BASE        = os.getenv("RSSHUB_BASE", "https://rsshub.app").rstrip("/")
+# --------- Config from secrets ---------
+KEYWORDS = [k.strip() for k in os.getenv("KEYWORDS", "iphone").split(",") if k.strip()]
+ACTIVE_PLATFORMS = [p.strip().lower() for p in os.getenv("ACTIVE_PLATFORMS", "hackernews").split(",") if p.strip()]
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "300"))
 
-GCP_SA_PATH        = os.getenv("GCP_SA_PATH", "gcp_sa.json")
+# Telegram (optional)
+TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TG_CHAT  = os.getenv("TELEGRAM_CHAT_ID", "")
+TOP_N_TELEGRAM = int(os.getenv("TOP_N_TELEGRAM", "20"))
 
-KEYWORDS = [k.strip() for k in re.split(r"[,\n;]", KEYWORDS_RAW) if k.strip()]
-UTC_NOW = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
+# Sheets
+SPREADSHEET_ID = os.getenv("SHEETS_SPREADSHEET_ID", "")
+SHEETS_TAB     = os.getenv("SHEETS_TAB", "leads")
 
+# RSSHub
+RSSHUB_BASE = os.getenv("RSSHUB_BASE", "https://rsshub.app").rstrip("/")
 
-# -------- Helpers --------
-def tg_send(msg: str):
-    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-        return
+# GCP SA key path (Actions writes it)
+GCP_KEY_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or os.getenv("GCP_SA_KEY_PATH", "")
+
+# --------- Helpers ---------
+def iso_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S%z")
+
+def short_uid(s: str) -> str:
+    return hashlib.md5(s.encode()).hexdigest()[:10]
+
+def tg_send(text: str):
+    if not (TG_TOKEN and TG_CHAT): return
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": msg,
-            "disable_web_page_preview": True,
-            "parse_mode": "HTML",
-        }
-        requests.post(url, data=payload, timeout=20)
+        requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": TG_CHAT, "text": text, "disable_web_page_preview": True},
+            timeout=20
+        )
     except Exception:
         pass
 
+def parse_rss_items(xml_text: str):
+    """Very simple RSS parser: returns list of dicts with title/link/author if present."""
+    items = []
+    parts = xml_text.split("<item>")[1:]
+    for part in parts:
+        try:
+            title = part.split("<title>")[1].split("</title>")[0]
+        except Exception:
+            title = ""
+        try:
+            link = part.split("<link>")[1].split("</link>")[0]
+        except Exception:
+            # some feeds use <guid> as link
+            try:
+                link = part.split("<guid>")[1].split("</guid>")[0]
+            except Exception:
+                continue
+        # author variants
+        author = ""
+        for tag in ["<author>", "<dc:creator>"]:
+            if tag in part:
+                try:
+                    author = part.split(tag)[1].split(f"</{tag.strip('<>')}>")[0]
+                    break
+                except Exception:
+                    pass
+        items.append({"title": html.unescape(title.strip()), "link": link.strip(), "author": html.unescape(author.strip())})
+    return items
 
-def fetch_rss(url: str):
-    try:
-        d = feedparser.parse(url)
-        return d.entries or []
-    except Exception:
-        return []
-
-
-def norm_item(platform, topic, title, url, author="", source=""):
+def to_row(platform, topic, title, link, author=""):
+    # Map exactly to your sheet headers:
+    # platform, topic, username, profile_url, dm_url, content_url, intent_score, ts, uid
+    username = author or ""
+    profile_url = ""
+    dm_url = ""
+    content_url = link
+    intent_score = "1"  # placeholder — istəsən sonradan skorlama əlavə edərik
+    ts = iso_now()
+    uid = short_uid(f"{platform}|{content_url}")
     return {
         "platform": platform,
         "topic": topic,
-        "title": title.strip() if title else "",
-        "url": url.strip() if url else "",
-        "username": author.strip() if author else "",
-        "source": source.strip() if source else "",
-        "ts": datetime.utcnow().isoformat()
+        "username": username,
+        "profile_url": profile_url,
+        "dm_url": dm_url,
+        "content_url": content_url,
+        "intent_score": intent_score,
+        "ts": ts,
+        "uid": uid,
+        "title": title
     }
 
-
-# -------- Platform fetchers (RSSHub əsas) --------
+# --------- Platform fetchers (RSSHub) ---------
 def fetch_hackernews(topic):
-    # HackerNews – search RSSHub
-    url = f"{RSSHUB_BASE}/hackernews/search/{requests.utils.quote(topic)}"
-    items = []
-    for e in fetch_rss(url)[:50]:
-        title = e.get("title", "")
-        link  = e.get("link", "")
-        items.append(norm_item("hackernews", topic, title, link, source="hn"))
-    return items
-
-def fetch_producthunt(topic):
-    # Product Hunt – search
-    url = f"{RSSHUB_BASE}/producthunt/search/{requests.utils.quote(topic)}"
-    items = []
-    for e in fetch_rss(url)[:50]:
-        title = e.get("title", "")
-        link  = e.get("link", "")
-        items.append(norm_item("producthunt", topic, title, link, source="ph"))
-    return items
+    url = f"{RSSHUB_BASE}/hackernews/keyword/{quote(topic)}"
+    r = requests.get(url, timeout=30); r.raise_for_status()
+    return [to_row("hackernews", topic, it["title"], it["link"], it.get("author","")) for it in parse_rss_items(r.text)]
 
 def fetch_reddit(topic):
-    # Reddit search
-    url = f"{RSSHUB_BASE}/reddit/search/{requests.utils.quote(topic)}"
-    items = []
-    for e in fetch_rss(url)[:80]:
-        title = e.get("title", "")
-        link  = e.get("link", "")
-        author = (e.get("author") or "").replace("/u/", "").replace("u/", "")
-        items.append(norm_item("reddit", topic, title, link, author, "reddit"))
-    return items
+    # Reddit search via RSSHub
+    url = f"{RSSHUB_BASE}/reddit/search/{quote(topic)}"
+    r = requests.get(url, timeout=30); r.raise_for_status()
+    return [to_row("reddit", topic, it["title"], it["link"], it.get("author","")) for it in parse_rss_items(r.text)]
 
 def fetch_youtube(topic):
-    # YouTube search
-    url = f"{RSSHUB_BASE}/youtube/search/{requests.utils.quote(topic)}"
-    items = []
-    for e in fetch_rss(url)[:80]:
-        title = e.get("title", "")
-        link  = e.get("link", "")
-        author = e.get("author", "")
-        items.append(norm_item("youtube", topic, title, link, author, "yt"))
-    return items
-
-def fetch_instagram(topic):
-    # Instagram hashtag
-    url = f"{RSSHUB_BASE}/instagram/tag/{requests.utils.quote(topic)}"
-    items = []
-    for e in fetch_rss(url)[:80]:
-        title = e.get("title", "")
-        link  = e.get("link", "")
-        author = e.get("author", "")
-        items.append(norm_item("instagram", topic, title, link, author, "ig"))
-    return items
+    # YouTube search via RSSHub
+    url = f"{RSSHUB_BASE}/youtube/search/{quote(topic)}"
+    r = requests.get(url, timeout=30); r.raise_for_status()
+    return [to_row("youtube", topic, it["title"], it["link"], it.get("author","")) for it in parse_rss_items(r.text)]
 
 def fetch_tiktok(topic):
-    # TikTok search/hashtag (RSSHub)
-    url = f"{RSSHUB_BASE}/tiktok/search/{requests.utils.quote(topic)}"
-    items = []
-    for e in fetch_rss(url)[:80]:
-        title = e.get("title", "")
-        link  = e.get("link", "")
-        author = e.get("author", "")
-        items.append(norm_item("tiktok", topic, title, link, author, "tt"))
-    return items
+    # TikTok keyword via RSSHub (public)
+    url = f"{RSSHUB_BASE}/tiktok/keyword/{quote(topic)}"
+    r = requests.get(url, timeout=30); r.raise_for_status()
+    return [to_row("tiktok", topic, it["title"], it["link"], it.get("author","")) for it in parse_rss_items(r.text)]
 
+def fetch_instagram(topic):
+    # Instagram tag via RSSHub (public tags)
+    url = f"{RSSHUB_BASE}/instagram/tag/{quote(topic)}"
+    r = requests.get(url, timeout=30); r.raise_for_status()
+    return [to_row("instagram", topic, it["title"], it["link"], it.get("author","")) for it in parse_rss_items(r.text)]
 
 FETCHERS = {
     "hackernews": fetch_hackernews,
-    "producthunt": fetch_producthunt,
-    "reddit": fetch_reddit,
-    "youtube": fetch_youtube,
-    "instagram": fetch_instagram,
-    "tiktok": fetch_tiktok,
+    "reddit":     fetch_reddit,
+    "youtube":    fetch_youtube,
+    "tiktok":     fetch_tiktok,
+    "instagram":  fetch_instagram,
 }
 
-
-# -------- Google Sheets --------
-def gsheets_client():
-    from google.oauth2 import service_account
+# --------- Google Sheets client ----------
+def get_sheets_service():
+    if not (SPREADSHEET_ID and GCP_KEY_PATH):
+        return None
+    from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_file(GCP_KEY_PATH, scopes=scopes)
+    return build("sheets", "v4", credentials=creds)
 
-    creds = service_account.Credentials.from_service_account_file(
-        GCP_SA_PATH,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
-    return build("sheets", "v4", credentials=creds).spreadsheets()
+def sheet_append_rows(rows):
+    svc = get_sheets_service()
+    if not svc or not rows: return
+    body = {"values": rows}
+    svc.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SHEETS_TAB}!A1",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body=body
+    ).execute()
 
-
-def sheet_get_existing_urls(svc):
-    # URL sütunu: E (1-based: column 5) -> range "leads!E2:E"
-    rng = f"{SHEET_TAB}!E2:E"
-    res = svc.values().get(spreadsheetId=SHEET_ID, range=rng).execute()
-    vals = res.get("values", [])
-    return set(v[0] for v in vals if v)
-
-
-def sheet_init_headers_if_empty(svc):
-    rng = f"{SHEET_TAB}!A1:H1"
-    res = svc.values().get(spreadsheetId=SHEET_ID, range=rng).execute()
-    if not res.get("values"):
-        headers = [["platform","topic","username","profile_url","title","url","source","ts"]]
-        svc.values().update(
-            spreadsheetId=SHEET_ID, range=rng, valueInputOption="RAW",
-            body={"values": headers}).execute()
-
-
-def sheet_append_rows(svc, rows):
-    if not rows:
-        return
-    rng = f"{SHEET_TAB}!A2"
-    svc.values().append(
-        spreadsheetId=SHEET_ID, range=rng, valueInputOption="RAW", insertDataOption="INSERT_ROWS",
-        body={"values": rows}).execute()
-
-
-# -------- Pipeline --------
-def run_pipeline():
-    tg_send(f"✅ GitHub Actions bot başladı. Axtarışa keçirəm…\n<b>Zaman:</b> {UTC_NOW}\n<b>Aktiv:</b> {', '.join(ACTIVE_PLATFORMS)}\n<b>Mövzular:</b> {', '.join(KEYWORDS)}")
-
-    # 1) Topla
+# --------- Main ----------
+def main():
     collected = []
-    for topic in KEYWORDS:
-        for platform in ACTIVE_PLATFORMS:
-            fn = FETCHERS.get(platform)
-            if not fn:
-                continue
+    for kw in KEYWORDS:
+        for plat in ACTIVE_PLATFORMS:
+            fn = FETCHERS.get(plat)
+            if not fn: continue
             try:
-                items = fn(topic)
+                items = fn(kw)
                 collected.extend(items)
             except Exception as e:
-                tg_send(f"⚠️ {platform} üçün xəta: {html.escape(str(e))}")
-
-    # 2) Limit & dedup (URL üzrə)
-    # – Sheets-də olan URL-ləri oxu
-    svc = gsheets_client()
-    sheet_init_headers_if_empty(svc)
-    existing = sheet_get_existing_urls(svc)
-
-    unique = []
-    seen = set(existing)
-    for it in collected:
-        url = it["url"]
-        if not url or url in seen:
-            continue
-        unique.append(it)
-        seen.add(url)
-        if len(unique) >= DAILY_LIMIT:
+                tg_send(f"ℹ️ {plat} xətası ({kw}): {e}")
+        if len(collected) >= DAILY_LIMIT:
             break
 
-    # 3) Sheets-ə yaz
-    rows = []
-    for it in unique:
-        rows.append([
-            it["platform"],
-            it["topic"],
-            it.get("username",""),
-            "",  # profile_url (opsional)
-            it["title"],
-            it["url"],
-            it["source"],
-            it["ts"],
-        ])
-    sheet_append_rows(svc, rows)
+    # de-dup by content_url
+    seen, unique = set(), []
+    for it in collected:
+        cu = it["content_url"]
+        if cu in seen: continue
+        seen.add(cu)
+        unique.append(it)
+        if len(unique) >= DAILY_LIMIT: break
 
-    # 4) Telegram-a TOP N
-    top = unique[:TOP_N_TELEGRAM]
-    if top and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-        parts = []
-        for it in top:
-            t = html.escape(it["title"])
-            u = it["url"]
-            parts.append(f"• <b>{t}</b>\n🔗 {u}\n#{it['platform']} #{it['topic']}")
-        tg_send("\n\n".join(parts))
+    # Sheets rows (exact column order)
+    rows = [[
+        it["platform"],
+        it["topic"],
+        it["username"],
+        it["profile_url"],
+        it["dm_url"],
+        it["content_url"],
+        it["intent_score"],
+        it["ts"],
+        it["uid"],
+    ] for it in unique]
 
-    tg_send(f"🏁 GitHub Actions bot bitdi.\nToplandı: <b>{len(unique)}</b> (Sheets-ə yazıldı).")
+    sheet_append_rows(rows)
 
+    # Telegram TOP N
+    if TG_TOKEN and TG_CHAT and TOP_N_TELEGRAM > 0:
+        top = unique[:TOP_N_TELEGRAM]
+        if top:
+            tg_send("✅ GitHub Actions bot başladı. Axtarışa keçdim…")
+            for it in top:
+                line = f"• {it.get('title','')}\n🔗 {it['content_url']}\n#{it['platform']}"
+                tg_send(line)
+            tg_send("🏁 Axtarış tamamlandı.")
 
 if __name__ == "__main__":
-    run_pipeline()
+    main()
