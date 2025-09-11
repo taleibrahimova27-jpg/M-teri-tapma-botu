@@ -3,7 +3,6 @@ name: build
 on:
   workflow_dispatch:
   schedule:
-    # Gündə 3 dəfə (UTC) — istəsən saatları dəyiş
     - cron: "0 7 * * *"
     - cron: "0 15 * * *"
     - cron: "0 23 * * *"
@@ -11,7 +10,6 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -30,25 +28,19 @@ jobs:
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
-          if [ -z "$GCP_SA_KEY" ]; then
-            echo "GCP_SA_KEY MISSING"; exit 1
-          fi
+          if [ -z "$GCP_SA_KEY" ]; then echo "GCP_SA_KEY MISSING"; exit 1; fi
           echo "$GCP_SA_KEY" > gcp_key.json
 
       - name: Check required secrets
         env:
           SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
         run: |
-          if [ -z "$SHEETS_SPREADSHEET_ID" ]; then
-            echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1
-          fi
-          echo "All required secrets are present."
+          if [ -z "$SHEETS_SPREADSHEET_ID" ]; then echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1; fi
+          echo "Secrets OK"
 
-      - name: Run script
+      - name: Run script (auto-find main.py)
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp_key.json
-
-          # ==== Optional configs (vars/secrets) ====
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
           DAILY_LIMIT:       ${{ secrets.DAILY_LIMIT || '250' }}
@@ -58,5 +50,26 @@ jobs:
           RSSHUB_BASE:       ${{ secrets.RSSHUB_BASE || 'https://rsshub.app' }}
           SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
           SHEETS_TAB:        ${{ secrets.SHEETS_TAB || 'leads' }}
+        shell: bash
         run: |
-          python main.py
+          echo "Workspace: $GITHUB_WORKSPACE"
+          ls -la
+          echo "Searching for main.py…"
+          ENTRY=""
+          if [ -f main.py ]; then
+            ENTRY="main.py"
+          else
+            ENTRY=$(find . -maxdepth 3 -type f -name "main.py" | head -n1 || true)
+          fi
+          if [ -z "$ENTRY" ]; then
+            echo "main.py tapılmadı. Mövcud .py fayllar:"
+            find . -maxdepth 3 -type f -name "*.py" -print
+            # varsa ilk .py faylı işə sal
+            ENTRY=$(find . -maxdepth 3 -type f -name "*.py" | head -n1 || true)
+          fi
+          if [ -z "$ENTRY" ]; then
+            echo "Heç bir Python entrypoint tapılmadı. Zəhmət olmasa faylın adını 'main.py' edin və ya yolunu bildirin."
+            exit 1
+          fi
+          echo "Running: python $ENTRY"
+          python "$ENTRY"
