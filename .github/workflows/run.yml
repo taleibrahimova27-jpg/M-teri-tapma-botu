@@ -8,11 +8,18 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+
+    # Secrets-i mühit dəyişəni kimi veririk (maskalanır)
+    env:
+      SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
+      SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
+      TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+      GCP_SA_KEY:            ${{ secrets.GCP_SA_KEY }}
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,43 +29,37 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib gspread
+          pip install requests feedparser google-api-python-client \
+                     google-auth google-auth-httplib2 google-auth-oauthlib \
+                     gspread
 
-      # --- GCP service account açarı (JSON) yazılır
+      # JSON açarını fayla yazırıq
       - name: Write service account key
         run: |
-          echo '${{ secrets.GCP_SA_KEY }}' > $GITHUB_WORKSPACE/gcp_key.json
+          printf '%s' "$GCP_SA_KEY" > "$GITHUB_WORKSPACE/gcp_key.json"
 
-      # --- Lazımi secretlər varmı?
+      # Lazımi dəyərlər varmı? (multiline problemindən yan keçirik)
       - name: Check required secrets
         run: |
-          test -n "${{ secrets.SHEETS_SPREADSHEET_ID }}" || (echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1)
-          test -n "${{ secrets.SHEETS_TAB }}"           || (echo "SHEETS_TAB MISSING"; exit 1)
-          test -n "${{ secrets.GCP_SA_KEY }}"           || (echo "GCP_SA_KEY MISSING"; exit 1)
+          set -euo pipefail
+          for v in SHEETS_SPREADSHEET_ID SHEETS_TAB; do
+            if [ -z "${!v:-}" ]; then
+              echo "$v MISSING"; exit 1
+            fi
+          done
+          if [ ! -s "$GITHUB_WORKSPACE/gcp_key.json" ]; then
+            echo "GCP_SA_KEY MISSING OR EMPTY"; exit 1
+          fi
 
-      # --- DEBUG: Burada faylları göstəririk
-      - name: Show workspace contents
+      - name: Show workspace contents (debug)
         run: |
           echo "PWD=$(pwd)"
           ls -la
-          echo "---- If main.py is not listed above, path is wrong ----"
 
-      # --- Flag-lar (isteğe bağlı)
-      - name: Set flags (optional)
-        run: |
-          echo "DAILY_LIMIT=${{ secrets.DAILY_LIMIT || '250' }}" >> $GITHUB_ENV
-          echo "TOP_N_TELEGRAM=${{ secrets.TOP_N_TELEGRAM || '20' }}" >> $GITHUB_ENV
-
-      # --- Script-i işə sal
       - name: Run script
-        working-directory: ${{ github.workspace }}
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp_key.json
-          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB: ${{ secrets.SHEETS_TAB }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DAILY_LIMIT: ${{ env.DAILY_LIMIT }}
-          TOP_N_TELEGRAM: ${{ env.TOP_N_TELEGRAM }}
+          DAILY_LIMIT: ${{ secrets.DAILY_LIMIT || '250' }}
+          TOP_N_TELEGRAM: ${{ secrets.TOP_N_TELEGRAM || '20' }}
         run: |
           python ./main.py
