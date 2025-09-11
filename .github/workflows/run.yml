@@ -3,19 +3,14 @@ name: build
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 7,13,19 * * *"   # gündə 3 dəfə
+    # Gündə 3 dəfə (UTC) — istəsən saatları dəyiş
+    - cron: "0 7 * * *"
+    - cron: "0 15 * * *"
+    - cron: "0 23 * * *"
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
-    # Secrets-i mühit dəyişəni kimi veririk (maskalanır)
-    env:
-      SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-      SHEETS_TAB:            ${{ secrets.SHEETS_TAB }}
-      TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
-      GCP_SA_KEY:            ${{ secrets.GCP_SA_KEY }}
 
     steps:
       - name: Checkout repo
@@ -29,31 +24,39 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser google-api-python-client \
-                     google-auth google-auth-httplib2 google-auth-oauthlib \
-                     gspread
+          pip install gspread google-auth requests feedparser beautifulsoup4
 
-      # JSON açarını fayla yazırıq
       - name: Write service account key
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
-          printf '%s' "$GCP_SA_KEY" > "$GITHUB_WORKSPACE/gcp_key.json"
-
-      # Lazımi dəyərlər varmı? (multiline problemindən yan keçirik)
-      - name: Check required secrets
-        run: |
-          set -euo pipefail
-          for v in SHEETS_SPREADSHEET_ID SHEETS_TAB; do
-            if [ -z "${!v:-}" ]; then
-              echo "$v MISSING"; exit 1
-            fi
-          done
-          if [ ! -s "$GITHUB_WORKSPACE/gcp_key.json" ]; then
-            echo "GCP_SA_KEY MISSING OR EMPTY"; exit 1
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "GCP_SA_KEY MISSING"; exit 1
           fi
+          echo "$GCP_SA_KEY" > gcp_key.json
 
-      - name: Show workspace contents (debug)
+      - name: Check required secrets
+        env:
+          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
         run: |
-          echo "PWD=$(pwd)"
-          ls -la
+          if [ -z "$SHEETS_SPREADSHEET_ID" ]; then
+            echo "SHEETS_SPREADSHEET_ID MISSING"; exit 1
+          fi
+          echo "All required secrets are present."
 
-      python bot/main.py
+      - name: Run script
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp_key.json
+
+          # ==== Optional configs (vars/secrets) ====
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          DAILY_LIMIT:       ${{ secrets.DAILY_LIMIT || '250' }}
+          TOP_N_TELEGRAM:    ${{ secrets.TOP_N_TELEGRAM || '20' }}
+          ACTIVE_PLATFORMS:  ${{ secrets.ACTIVE_PLATFORMS || 'hackernews,reddit' }}
+          KEYWORDS:          ${{ secrets.KEYWORDS || 'iphone,ai,crypto' }}
+          RSSHUB_BASE:       ${{ secrets.RSSHUB_BASE || 'https://rsshub.app' }}
+          SHEETS_SPREADSHEET_ID: ${{ secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB:        ${{ secrets.SHEETS_TAB || 'leads' }}
+        run: |
+          python main.py
