@@ -22,7 +22,15 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install gspread google-auth requests feedparser beautifulsoup4
+          pip install \
+            google-api-python-client \
+            google-auth \
+            google-auth-httplib2 \
+            google-auth-oauthlib \
+            gspread \
+            requests \
+            feedparser \
+            beautifulsoup4
 
       - name: Write service account key
         env:
@@ -54,7 +62,6 @@ jobs:
         run: |
           echo "Workspace: $GITHUB_WORKSPACE"
           ls -la
-          echo "Searching for main.py…"
           ENTRY=""
           if [ -f main.py ]; then
             ENTRY="main.py"
@@ -64,11 +71,10 @@ jobs:
           if [ -z "$ENTRY" ]; then
             echo "main.py tapılmadı. Mövcud .py fayllar:"
             find . -maxdepth 3 -type f -name "*.py" -print
-            # varsa ilk .py faylı işə sal
             ENTRY=$(find . -maxdepth 3 -type f -name "*.py" | head -n1 || true)
           fi
           if [ -z "$ENTRY" ]; then
-            echo "Heç bir Python entrypoint tapılmadı. Zəhmət olmasa faylın adını 'main.py' edin və ya yolunu bildirin."
+            echo "Heç bir Python entrypoint tapılmadı."
             exit 1
           fi
           echo "Running: python $ENTRY"
